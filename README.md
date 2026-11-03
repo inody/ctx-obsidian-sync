@@ -37,7 +37,8 @@ enabled = false
 ## Install
 
 ```bash
-git clone git@github.com:inody/ctx-obsidian-sync.git ~/ctx-obsidian-sync
+gh auth login  # only when this device is not already authenticated
+gh repo clone inody/ctx-obsidian-sync ~/ctx-obsidian-sync
 ~/ctx-obsidian-sync/install.sh --load
 ```
 
