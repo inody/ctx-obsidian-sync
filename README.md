@@ -1,6 +1,6 @@
 # ctx → Obsidian session sync
 
-Sync local coding-agent history (Codex, Claude, Pi, OpenCode) into Obsidian using [ctx](https://ctx.rs) 1.3.2's local Core/Tantivy index.
+Sync local coding-agent history (Codex, Claude, Pi, OpenCode) into Obsidian using [ctx](https://ctx.rs) 2.4.1's local Core/Tantivy index.
 
 The repository contains only the sync code and LaunchAgent template. It does not contain the ctx database, agent transcripts, generated Obsidian notes, credentials, or machine-local state.
 
@@ -12,15 +12,15 @@ agent history --ctx import--> ~/.ctx/search/lexical (immutable Core/Tantivy gene
     --ctx_daily_digest.py + Pi--> <vault>/01_Diary/YYYY-MM-DD.md
 ```
 
-The pre-v0.26 `~/.ctx/work.sqlite` Store is not migrated or queried by CTX 1.3.2. If it still exists after an upgrade, it is an inert owner-managed backup rather than the active index.
+The pre-v0.26 `~/.ctx/work.sqlite` Store is not migrated or queried by CTX 2.4.1. If it still exists after an upgrade, it is an inert owner-managed backup rather than the active index.
 
 Each device uses `hostname -s` as its `pc` identifier. Notes from multiple devices can coexist in a Dropbox-synced vault. The session sync runs hourly. A separate LaunchAgent runs at 03:10 local time and summarizes the previous calendar day into a marker-delimited diary section.
 
 ## Requirements
 
 - macOS for the included LaunchAgent
-- Python 3 with `zoneinfo`
-- `ctx` 1.3.2 installed at `~/.local/bin/ctx` or available on `PATH`
+- Python 3.9 or newer with `zoneinfo`
+- `ctx` 2.4.1 installed at `~/.local/bin/ctx` or available on `PATH`
 - Pi installed at `~/.pi/agent/bin/pi` or available on `PATH`
 - An Obsidian vault; default: `~/Dropbox/Obsidian/ObsidianVault`
 
@@ -95,7 +95,7 @@ ctx import --all --format json --progress none
 ctx index wait --lexical --format json
 ```
 
-CTX 1.3.2 auto-discovers Pi at `~/.pi/agent/sessions`; the hourly wrapper does not import that path a second time. Imports preserve valid records when isolated records are malformed and expose rejections/source failures in their result.
+CTX 2.4.1 auto-discovers Pi at `~/.pi/agent/sessions`; the hourly wrapper does not import that path a second time. Imports preserve valid records when isolated records are malformed and expose rejections/source failures in their result. The wrapper evaluates the machine-readable publication outcome, so a nonzero command status caused only by independent source failures does not discard a usable published Core generation.
 
 The wrapper scans the most recent three calendar days each hour. Session discovery uses exact RFC3339 day bounds with cursor-safe `ctx list events` enumeration, then obtains complete event counts and metadata from `ctx show session --format json`. Sync is idempotent: the local state file records each session's event count so an in-progress session is rewritten only when it changes. If Core session IDs differ after migration, the writer reconciles an existing note by provider-native session ID and reuses its filename instead of creating a duplicate note set.
 
@@ -120,7 +120,7 @@ The daily state tracks source hashes. Yesterday is always checked, while the two
 ## Local data not tracked by Git
 
 - active ctx index: immutable generations under `~/.ctx/search/lexical/`
-- optional inert pre-v0.26 Store/backup: `~/.ctx/work.sqlite` (not read by CTX 1.3.2)
+- optional inert pre-v0.26 Store/backup: `~/.ctx/work.sqlite` (not read by CTX 2.4.1)
 - session sync state: `~/.local/state/ctx-obsidian-sync/synced.json`
 - daily digest state and lock: `~/.local/state/ctx-obsidian-sync/daily-digests.json`, `daily-digest.lock/`
 - generated notes: `<vault>/ctx-sessions/` and the marker-delimited sections in `<vault>/01_Diary/`

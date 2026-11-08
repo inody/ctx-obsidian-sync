@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small, strict helpers for the ctx 1.3 Core/Tantivy JSON APIs."""
+"""Small, strict helpers for the ctx 2.4 Core/Tantivy JSON APIs."""
 
 from __future__ import annotations
 

@@ -8,25 +8,37 @@ export TZ="${CTX_OBSIDIAN_TZ:-${AI_OBSIDIAN_TZ:-Europe/London}}"  # keep `date` 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 # Keep CTX in the non-daemon operating model and run one explicit finite Core
-# refresh. CTX 1.3 auto-discovers Pi at ~/.pi/agent/sessions, so no duplicate
+# refresh. CTX 2.4 auto-discovers Pi at ~/.pi/agent/sessions, so no duplicate
 # exact-path import is needed. Valid records still commit when individual records
 # or independent sources fail; log only aggregate diagnostics, never source text.
 ctx index mode manual --format json >/dev/null
 import_result=$(mktemp)
 trap 'rm -f "$import_result"' EXIT INT TERM
+set +e
 ctx import --all --format json --progress none >"$import_result"
-python3 - "$import_result" <<'PY'
+import_rc=$?
+set -e
+python3 - "$import_result" "$import_rc" <<'PY'
 import json
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     result = json.load(handle)
-if result.get("schema_version") != 2 or result.get("outcome") == "failure":
+command_rc = int(sys.argv[2])
+outcome = result.get("outcome")
+usable_outcomes = {
+    "success",
+    "completed_with_rejections",
+    "completed_with_source_failures",
+    "completed_with_rejections_and_source_failures",
+}
+if result.get("schema_version") != 2 or outcome not in usable_outcomes:
     raise SystemExit("ctx import did not publish a usable Core result")
 totals = result.get("totals", {})
 print(
-    "[ctx import] outcome={} sessions={} rejected_records={} failed_sources={}".format(
-        result.get("outcome"),
+    "[ctx import] command_rc={} outcome={} sessions={} rejected_records={} failed_sources={}".format(
+        command_rc,
+        outcome,
         totals.get("current_indexed_sessions", 0),
         totals.get("rejected_records", 0),
         totals.get("failed_sources", 0),

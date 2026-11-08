@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
 import json
+import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -151,8 +154,64 @@ class ReconciliationTests(unittest.TestCase):
             ctx_to_obsidian_sessions.unique_note([Path("a"), Path("b")], "provider session")
 
 
+class WrapperImportOutcomeTests(unittest.TestCase):
+    def run_wrapper(self, outcome, import_rc):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            script_dir = home / "scripts"
+            script_dir.mkdir()
+            wrapper = script_dir / "ctx_obsidian_sync.sh"
+            shutil.copy2(ROOT / "bin" / "ctx_obsidian_sync.sh", wrapper)
+            marker = home / "exporter-ran"
+            (script_dir / "ctx_to_obsidian_sessions.py").write_text(
+                "import os, pathlib\npathlib.Path(os.environ['SYNC_MARKER']).write_text('ok')\n",
+                encoding="utf-8",
+            )
+            bin_dir = home / ".local" / "bin"
+            bin_dir.mkdir(parents=True)
+            fake_ctx = bin_dir / "ctx"
+            fake_ctx.write_text(
+                """#!/bin/bash
+if [[ "$1" == "index" ]]; then
+  exit 0
+fi
+if [[ "$1" == "import" ]]; then
+  printf '{"schema_version":2,"outcome":"%s","totals":{"current_indexed_sessions":3,"rejected_records":1,"failed_sources":1}}\\n' "$FAKE_IMPORT_OUTCOME"
+  exit "$FAKE_IMPORT_RC"
+fi
+exit 2
+""",
+                encoding="utf-8",
+            )
+            fake_ctx.chmod(0o755)
+            env = os.environ.copy()
+            env.update({
+                "HOME": str(home),
+                "FAKE_IMPORT_OUTCOME": outcome,
+                "FAKE_IMPORT_RC": str(import_rc),
+                "SYNC_MARKER": str(marker),
+            })
+            proc = subprocess.run(
+                [str(wrapper)], capture_output=True, text=True, env=env
+            )
+            return proc, marker.exists()
+
+    def test_published_partial_import_continues_to_exporter(self):
+        proc, exporter_ran = self.run_wrapper(
+            "completed_with_rejections_and_source_failures", 1
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(exporter_ran)
+        self.assertIn("command_rc=1", proc.stderr)
+
+    def test_failed_import_stops_before_exporter(self):
+        proc, exporter_ran = self.run_wrapper("failure", 1)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertFalse(exporter_ran)
+
+
 class DigestParsingTests(unittest.TestCase):
-    def test_ctx_132_iso_markdown_heading_is_parsed(self):
+    def test_ctx_iso_markdown_heading_is_parsed(self):
         text = "## user - message - 2026-11-08T06:29:26.207Z\n\nhello\n"
         entries = ctx_daily_digest.entries_from_markdown(
             text,
