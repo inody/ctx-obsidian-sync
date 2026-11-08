@@ -6,6 +6,15 @@ set -u
 export PATH="$HOME/.local/bin:$HOME/.pi/agent/bin:$PATH"
 export TZ="${CTX_OBSIDIAN_TZ:-${AI_OBSIDIAN_TZ:-Europe/London}}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+
+# Session notes may be produced on every computer, but only the designated
+# coordinator writes the shared Diary file.
+required_host="${CTX_DAILY_DIGEST_HOST:-}"
+current_host="$(hostname -s)"
+if [[ -n "$required_host" && "$current_host" != "$required_host" ]]; then
+  echo "[skip] daily digest coordinator is $required_host (current host: $current_host)" >&2
+  exit 0
+fi
 state_dir="$HOME/.local/state/ctx-obsidian-sync"
 lock_dir="$state_dir/daily-digest.lock"
 mkdir -p "$state_dir"
@@ -38,11 +47,11 @@ rc=0
 # unexpectedly backfilling historical diaries on first installation.
 for offset in 1 2 3; do
   day=$(bsd_day "$offset")
-  extra=()
   if [[ "$offset" -gt 1 ]]; then
-    extra+=(--only-if-tracked)
+    python3 "$script_dir/ctx_daily_digest.py" --write --date "$day" --only-if-tracked || rc=1
+  else
+    python3 "$script_dir/ctx_daily_digest.py" --write --date "$day" || rc=1
   fi
-  python3 "$script_dir/ctx_daily_digest.py" --write --date "$day" "${extra[@]}" || rc=1
 done
 
 exit "$rc"

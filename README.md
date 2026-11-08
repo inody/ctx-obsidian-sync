@@ -46,9 +46,9 @@ gh repo clone inody/ctx-obsidian-sync ~/ctx-obsidian-sync
 
 The installer:
 
-- links the two executable scripts into `~/bin/`
-- renders the LaunchAgent with the current home directory
-- loads the LaunchAgent only when `--load` is supplied
+- links the session-sync and daily-digest scripts into `~/bin/`
+- renders both LaunchAgents with the current home directory
+- loads both LaunchAgents only when `--load` is supplied
 - preserves differing existing files as timestamped backups
 
 Environment overrides:
@@ -56,6 +56,7 @@ Environment overrides:
 - `OBSIDIAN_VAULT`: vault root
 - `CTX_OBSIDIAN_TZ` or `AI_OBSIDIAN_TZ`: timezone, default `Europe/London`
 - `CTX_DAILY_DIGEST_MODEL`: optional Pi model override; the configured Pi default is used otherwise
+- `CTX_DAILY_DIGEST_HOST`: hostname allowed to write the shared Diary; the included LaunchAgent designates `dimbp`
 
 ## Manual use
 
@@ -94,6 +95,8 @@ python3 ~/bin/ctx_daily_digest.py --write --date 2026-11-06
 ```
 
 The daily job uses exact local `ctx` transcripts when available and falls back to Dropbox-synced `ctx-sessions` notes for other computers. It filters messages by their event timestamp rather than the session start date. Pi runs with `--no-tools --no-session`, so digest generation cannot edit files through tools and does not create another history session. Only text between `ctx-daily-summary` markers is replaced; hand-written diary content is preserved. If the diary does not exist, it is created from `Template/diary.md`.
+
+On multiple computers, run the hourly session sync everywhere but allow the daily digest on only one coordinator. The included LaunchAgent sets `CTX_DAILY_DIGEST_HOST=dimbp`; other hosts exit successfully without calling Pi or touching the Diary. Manual `ctx_daily_digest.py` commands remain available on every host.
 
 The daily state tracks source hashes. Yesterday is always checked, while the two preceding dates are refreshed only after they have been tracked once, allowing late session/Dropbox updates without an initial historical backfill.
 
