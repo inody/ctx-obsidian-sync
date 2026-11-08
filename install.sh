@@ -37,12 +37,14 @@ link_script() {
 
 link_script "$repo_dir/bin/ctx_obsidian_sync.sh" "$HOME/bin/ctx_obsidian_sync.sh"
 link_script "$repo_dir/bin/ctx_to_obsidian_sessions.py" "$HOME/bin/ctx_to_obsidian_sessions.py"
+link_script "$repo_dir/bin/ctx_daily_digest.sh" "$HOME/bin/ctx_daily_digest.sh"
+link_script "$repo_dir/bin/ctx_daily_digest.py" "$HOME/bin/ctx_daily_digest.py"
 link_script "$repo_dir/README.md" "$HOME/bin/README.ctx-obsidian-sync.md"
 
-plist_target="$HOME/Library/LaunchAgents/com.dinoue.ctx-obsidian-sync.plist"
-plist_tmp="$(mktemp)"
-trap 'rm -f "$plist_tmp"' EXIT
-python3 - "$repo_dir/launchd/com.dinoue.ctx-obsidian-sync.plist.in" "$plist_tmp" "$HOME" <<'PY'
+render_plist() {
+  local source=$1 target=$2 tmp
+  tmp="$(mktemp)"
+  python3 - "$source" "$tmp" "$HOME" <<'PY'
 from pathlib import Path
 from xml.sax.saxutils import escape
 import sys
@@ -50,24 +52,35 @@ source, target, home = map(Path, sys.argv[1:])
 text = source.read_text(encoding="utf-8").replace("__HOME__", escape(str(home)))
 target.write_text(text, encoding="utf-8")
 PY
-plutil -lint "$plist_tmp" >/dev/null
-mkdir -p "$(dirname "$plist_target")"
-if [[ ! -e "$plist_target" ]] || ! cmp -s "$plist_tmp" "$plist_target"; then
-  if [[ -e "$plist_target" ]]; then
-    cp "$plist_target" "${plist_target}.backup-${stamp}"
-    echo "backup  ${plist_target}.backup-${stamp}"
+  plutil -lint "$tmp" >/dev/null
+  mkdir -p "$(dirname "$target")"
+  if [[ ! -e "$target" ]] || ! cmp -s "$tmp" "$target"; then
+    if [[ -e "$target" ]]; then
+      cp "$target" "${target}.backup-${stamp}"
+      echo "backup  ${target}.backup-${stamp}"
+    fi
+    cp "$tmp" "$target"
+    echo "wrote   $target"
+  else
+    echo "ok      $target"
   fi
-  cp "$plist_tmp" "$plist_target"
-  echo "wrote   $plist_target"
-else
-  echo "ok      $plist_target"
-fi
+  rm -f "$tmp"
+}
+
+sync_plist="$HOME/Library/LaunchAgents/com.dinoue.ctx-obsidian-sync.plist"
+digest_plist="$HOME/Library/LaunchAgents/com.dinoue.ctx-daily-digest.plist"
+render_plist "$repo_dir/launchd/com.dinoue.ctx-obsidian-sync.plist.in" "$sync_plist"
+render_plist "$repo_dir/launchd/com.dinoue.ctx-daily-digest.plist.in" "$digest_plist"
 
 if $load_agent; then
   domain="gui/$(id -u)"
-  launchctl bootout "$domain/com.dinoue.ctx-obsidian-sync" >/dev/null 2>&1 || true
-  launchctl bootstrap "$domain" "$plist_target"
+  for label in com.dinoue.ctx-obsidian-sync com.dinoue.ctx-daily-digest; do
+    launchctl bootout "$domain/$label" >/dev/null 2>&1 || true
+  done
+  launchctl bootstrap "$domain" "$sync_plist"
+  launchctl bootstrap "$domain" "$digest_plist"
   echo "loaded  $domain/com.dinoue.ctx-obsidian-sync"
+  echo "loaded  $domain/com.dinoue.ctx-daily-digest"
 else
-  echo "LaunchAgent was not reloaded. Run '$0 --load' when you want to load/reload it."
+  echo "LaunchAgents were not reloaded. Run '$0 --load' when you want to load/reload them."
 fi
