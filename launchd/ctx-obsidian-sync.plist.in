@@ -4,7 +4,7 @@
 <plist version="1.0">
   <dict>
     <key>Label</key>
-    <string>com.dinoue.ctx-obsidian-sync</string>
+    <string>__LABEL_PREFIX__.ctx-obsidian-sync</string>
 
     <key>ProgramArguments</key>
     <array>

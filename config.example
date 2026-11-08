@@ -1,0 +1,42 @@
+# ctx-obsidian-sync configuration
+#
+# Location: ${XDG_CONFIG_HOME:-~/.config}/ctx-obsidian-sync/config
+#           (override with the CTX_OBSIDIAN_SYNC_CONFIG environment variable)
+#
+# Syntax: one KEY=value per line. Values may be quoted; a leading ~/ expands to
+# your home directory; " # ..." after an unquoted value is a comment. The file
+# is parsed, not executed. An environment variable of the same name overrides
+# the value here, and command-line flags override both.
+
+# Required: Obsidian vault root.
+#OBSIDIAN_VAULT=~/Obsidian/MyVault
+
+# IANA timezone for calendar-day boundaries. Default: the system timezone.
+#CTX_OBSIDIAN_TZ=Europe/London
+
+# Diary folder under the vault, and the vault-relative template used when a
+# diary note does not exist yet. Defaults: Diary, and no template (a minimal
+# note with journal frontmatter is created). {{date:YYYY-MM-DD}} is substituted.
+#CTX_OBSIDIAN_DIARY_DIR=Diary
+#CTX_OBSIDIAN_DIARY_TEMPLATE=Templates/daily.md
+
+# Prefix of the LaunchAgent labels (<prefix>.ctx-obsidian-sync and
+# <prefix>.ctx-daily-digest). Read by install.sh only; re-run it after changing.
+#CTX_OBSIDIAN_LAUNCHD_PREFIX=local
+
+# When several computers share one vault, allow the scheduled daily digest only
+# on this host (compare with `hostname -s`). Default: no restriction.
+#CTX_DAILY_DIGEST_HOST=my-laptop
+
+# Pi model for the digest. Default: Pi's configured default model.
+#CTX_DAILY_DIGEST_MODEL=
+
+# Built-in digest language: en (default) or ja.
+#CTX_DAILY_DIGEST_LANGUAGE=en
+
+# Replace the built-in digest instructions with your own prompt file. Put
+# {{source}} where the day's conversation log should go; without it the log is
+# appended at the end. CTX_DAILY_DIGEST_HEADING is prepended to Pi's output if
+# missing (default: the built-in language's heading; set it empty to disable).
+#CTX_DAILY_DIGEST_PROMPT_FILE=~/.config/ctx-obsidian-sync/digest-prompt.md
+#CTX_DAILY_DIGEST_HEADING="## Work with AI agents"

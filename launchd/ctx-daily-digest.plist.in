@@ -4,19 +4,13 @@
 <plist version="1.0">
   <dict>
     <key>Label</key>
-    <string>com.dinoue.ctx-daily-digest</string>
+    <string>__LABEL_PREFIX__.ctx-daily-digest</string>
 
     <key>ProgramArguments</key>
     <array>
       <string>/bin/bash</string>
       <string>__HOME__/bin/ctx_daily_digest.sh</string>
     </array>
-
-    <key>EnvironmentVariables</key>
-    <dict>
-      <key>CTX_DAILY_DIGEST_HOST</key>
-      <string>dimbp</string>
-    </dict>
 
     <key>StartCalendarInterval</key>
     <dict>

@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bin"))
 
+import ctx_config
 import ctx_core
 import ctx_daily_digest
 import ctx_to_obsidian_sessions
@@ -47,6 +48,17 @@ def completion(items, terminal, cursor=None):
 
 def jsonl(*records):
     return "".join(json.dumps(record) + "\n" for record in records)
+
+
+def isolated_env(home):
+    """Environment that cannot see the developer's own config or settings."""
+    env = {
+        key: value for key, value in os.environ.items()
+        if key not in ctx_config.CONFIG_KEYS
+        and key not in {"AI_OBSIDIAN_TZ", "TZ", "XDG_CONFIG_HOME", "CTX_OBSIDIAN_SYNC_CONFIG"}
+    }
+    env["HOME"] = str(home)
+    return env
 
 
 class CoreEnumerationTests(unittest.TestCase):
@@ -162,6 +174,7 @@ class WrapperImportOutcomeTests(unittest.TestCase):
             script_dir.mkdir()
             wrapper = script_dir / "ctx_obsidian_sync.sh"
             shutil.copy2(ROOT / "bin" / "ctx_obsidian_sync.sh", wrapper)
+            shutil.copy2(ROOT / "bin" / "ctx_config.sh", script_dir / "ctx_config.sh")
             marker = home / "exporter-ran"
             (script_dir / "ctx_to_obsidian_sessions.py").write_text(
                 "import os, pathlib\npathlib.Path(os.environ['SYNC_MARKER']).write_text('ok')\n",
@@ -184,9 +197,8 @@ exit 2
                 encoding="utf-8",
             )
             fake_ctx.chmod(0o755)
-            env = os.environ.copy()
+            env = isolated_env(home)
             env.update({
-                "HOME": str(home),
                 "FAKE_IMPORT_OUTCOME": outcome,
                 "FAKE_IMPORT_RC": str(import_rc),
                 "SYNC_MARKER": str(marker),
@@ -225,6 +237,126 @@ class DigestParsingTests(unittest.TestCase):
         )
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0].body, "hello")
+
+
+CONFIG_SAMPLE = """
+# comment
+OBSIDIAN_VAULT=~/Notes/My Vault
+export CTX_OBSIDIAN_TZ="Asia/Tokyo"
+CTX_OBSIDIAN_DIARY_DIR=Journal  # trailing comment
+CTX_DAILY_DIGEST_HOST='host#1'
+CTX_DAILY_DIGEST_LANGUAGE=en
+CTX_DAILY_DIGEST_LANGUAGE=ja
+UNKNOWN_KEY=1
+not a setting
+"""
+
+
+class ConfigTests(unittest.TestCase):
+    def test_python_parser(self):
+        with mock.patch("sys.stderr"):
+            values = ctx_config.parse_config(CONFIG_SAMPLE)
+        self.assertEqual(values, {
+            "OBSIDIAN_VAULT": str(Path.home() / "Notes" / "My Vault"),
+            "CTX_OBSIDIAN_TZ": "Asia/Tokyo",
+            "CTX_OBSIDIAN_DIARY_DIR": "Journal",
+            "CTX_DAILY_DIGEST_HOST": "host#1",
+            "CTX_DAILY_DIGEST_LANGUAGE": "ja",
+        })
+
+    def test_shell_loader_matches_python_and_env_wins(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            config = home / ".config" / "ctx-obsidian-sync" / "config"
+            config.parent.mkdir(parents=True)
+            config.write_text(CONFIG_SAMPLE, encoding="utf-8")
+            env = isolated_env(home)
+            env["CTX_DAILY_DIGEST_HOST"] = ""  # explicitly empty env overrides the file
+            script = (
+                f'source "{ROOT / "bin" / "ctx_config.sh"}"; ctx_config_load; '
+                'for k in OBSIDIAN_VAULT CTX_OBSIDIAN_TZ CTX_OBSIDIAN_DIARY_DIR '
+                'CTX_DAILY_DIGEST_HOST CTX_DAILY_DIGEST_LANGUAGE UNKNOWN_KEY; '
+                'do printf "%s=%s\\n" "$k" "${!k-<unset>}"; done'
+            )
+            proc = subprocess.run(
+                ["/bin/bash", "-c", script], capture_output=True, text=True, env=env, check=True
+            )
+        self.assertEqual(proc.stdout.splitlines(), [
+            f"OBSIDIAN_VAULT={home / 'Notes' / 'My Vault'}",
+            "CTX_OBSIDIAN_TZ=Asia/Tokyo",
+            "CTX_OBSIDIAN_DIARY_DIR=Journal",
+            "CTX_DAILY_DIGEST_HOST=",
+            "CTX_DAILY_DIGEST_LANGUAGE=ja",
+            "UNKNOWN_KEY=<unset>",
+        ])
+        self.assertIn("unknown key UNKNOWN_KEY", proc.stderr)
+
+    def test_precedence_and_timezone(self):
+        config = {"OBSIDIAN_VAULT": "/from/config", "CTX_OBSIDIAN_TZ": "Asia/Tokyo"}
+        self.assertEqual(ctx_config.setting("OBSIDIAN_VAULT", config, environ={}), "/from/config")
+        self.assertEqual(
+            ctx_config.setting("OBSIDIAN_VAULT", config, environ={"OBSIDIAN_VAULT": "/env"}), "/env"
+        )
+        self.assertEqual(ctx_config.resolve_timezone(config, environ={}), "Asia/Tokyo")
+        self.assertEqual(
+            ctx_config.resolve_timezone(config, environ={"AI_OBSIDIAN_TZ": "Europe/Paris"}),
+            "Europe/Paris",
+        )
+        self.assertEqual(
+            ctx_config.resolve_timezone({}, environ={"TZ": "America/New_York"}), "America/New_York"
+        )
+
+    def test_missing_vault_is_an_error(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(ctx_config.ConfigError):
+                ctx_config.require_vault(None, {})
+
+
+class DigestHostTests(unittest.TestCase):
+    def run_digest_wrapper(self, host_setting):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            script_dir = home / "scripts"
+            script_dir.mkdir()
+            for name in ("ctx_daily_digest.sh", "ctx_config.sh"):
+                shutil.copy2(ROOT / "bin" / name, script_dir / name)
+            marker = home / "digest-ran"
+            (script_dir / "ctx_daily_digest.py").write_text(
+                "import os, pathlib\npathlib.Path(os.environ['DIGEST_MARKER']).write_text('ok')\n",
+                encoding="utf-8",
+            )
+            env = isolated_env(home)
+            env["DIGEST_MARKER"] = str(marker)
+            if host_setting is not None:
+                config = home / ".config" / "ctx-obsidian-sync" / "config"
+                config.parent.mkdir(parents=True)
+                config.write_text(f"CTX_DAILY_DIGEST_HOST={host_setting}\n", encoding="utf-8")
+            proc = subprocess.run(
+                ["/bin/bash", str(script_dir / "ctx_daily_digest.sh")],
+                capture_output=True, text=True, env=env,
+            )
+            return proc, marker.exists()
+
+    def test_unset_host_runs_everywhere(self):
+        proc, ran = self.run_digest_wrapper(None)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(ran)
+
+    def test_other_host_is_skipped(self):
+        proc, ran = self.run_digest_wrapper("no-such-host-xyz")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(ran)
+        self.assertIn("[skip]", proc.stderr)
+
+
+class DigestLanguageTests(unittest.TestCase):
+    def test_prompt_file_placeholder(self):
+        self.assertEqual(ctx_daily_digest.digest_prompt("LOG", "before {{source}} after"), "before LOG after")
+        self.assertEqual(ctx_daily_digest.digest_prompt("LOG", "intro\n"), "intro\nLOG")
+
+    def test_languages_have_distinct_headings(self):
+        self.assertEqual(ctx_daily_digest.LANGUAGES["ja"].heading, "## AIエージェントとの作業まとめ")
+        self.assertTrue(ctx_daily_digest.LANGUAGES["en"].prompt.startswith("You are"))
 
 
 if __name__ == "__main__":

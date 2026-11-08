@@ -4,8 +4,15 @@
 set -euo pipefail
 
 export PATH="$HOME/.local/bin:$PATH"
-export TZ="${CTX_OBSIDIAN_TZ:-${AI_OBSIDIAN_TZ:-Europe/London}}"  # keep `date` and Python on the same TZ
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=bin/ctx_config.sh
+source "$script_dir/ctx_config.sh"
+ctx_config_load
+# Keep `date` and Python on the same TZ; without a setting both use the system zone.
+tz_setting="${CTX_OBSIDIAN_TZ:-${AI_OBSIDIAN_TZ:-}}"
+if [[ -n "$tz_setting" ]]; then
+  export TZ="$tz_setting"
+fi
 
 # Keep CTX in the non-daemon operating model and run one explicit finite Core
 # refresh. CTX 2.4 auto-discovers Pi at ~/.pi/agent/sessions, so no duplicate

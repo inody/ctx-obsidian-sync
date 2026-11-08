@@ -4,11 +4,17 @@
 set -u
 
 export PATH="$HOME/.local/bin:$HOME/.pi/agent/bin:$PATH"
-export TZ="${CTX_OBSIDIAN_TZ:-${AI_OBSIDIAN_TZ:-Europe/London}}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=bin/ctx_config.sh
+source "$script_dir/ctx_config.sh"
+ctx_config_load
+tz_setting="${CTX_OBSIDIAN_TZ:-${AI_OBSIDIAN_TZ:-}}"
+if [[ -n "$tz_setting" ]]; then
+  export TZ="$tz_setting"
+fi
 
 # Session notes may be produced on every computer, but only the designated
-# coordinator writes the shared Diary file.
+# coordinator writes the shared Diary file. Unset/empty means no restriction.
 required_host="${CTX_DAILY_DIGEST_HOST:-}"
 current_host="$(hostname -s)"
 if [[ -n "$required_host" && "$current_host" != "$required_host" ]]; then

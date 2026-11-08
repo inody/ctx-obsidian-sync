@@ -34,12 +34,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+from ctx_config import ConfigError, load_config, require_vault, resolve_timezone
 from ctx_core import CtxError, run_ctx, session_summaries_for_dates
 
 HOME = Path.home()
 DEFAULT_CTX_BIN = str(HOME / ".local" / "bin" / "ctx")
-DEFAULT_TZ = os.environ.get("AI_OBSIDIAN_TZ") or os.environ.get("CTX_OBSIDIAN_TZ") or "Europe/London"
-DEFAULT_VAULT = os.environ.get("OBSIDIAN_VAULT") or str(HOME / "Dropbox" / "Obsidian" / "ObsidianVault")
 DEFAULT_SESSIONS_DIR = "ctx-sessions"
 DEFAULT_STATE = str(HOME / ".local" / "state" / "ctx-obsidian-sync" / "synced.json")
 
@@ -193,13 +192,13 @@ def render_note(ctx_bin: str, row: dict, pc_id: str, tz: ZoneInfo, max_body_char
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Render ctx sessions as Obsidian markdown notes.")
     p.add_argument("--ctx-bin", help="Path to ctx binary (default: search PATH / ~/.local/bin/ctx).")
-    p.add_argument("--timezone", default=DEFAULT_TZ, help=f"TZ for day boundary (default: {DEFAULT_TZ}).")
+    p.add_argument("--timezone", help="IANA TZ for day boundary (default: CTX_OBSIDIAN_TZ, then the system zone).")
     p.add_argument("--since", help="Start date YYYY-MM-DD (default: today in TZ).")
     p.add_argument("--until", help="End date YYYY-MM-DD inclusive (default: --since).")
     p.add_argument("--provider", help="Filter to one provider (pi, codex, claude, opencode, ...).")
     p.add_argument("--pc-id", default=socket.gethostname().split(".")[0], help="PC identifier (default: hostname -s).")
     p.add_argument("--write", action="store_true", help="Write notes to the vault (default: dry-run to stdout).")
-    p.add_argument("--vault", default=DEFAULT_VAULT, help=f"Vault root (default: {DEFAULT_VAULT}).")
+    p.add_argument("--vault", help="Vault root (default: OBSIDIAN_VAULT from the environment or config file).")
     p.add_argument("--sessions-dir", default=DEFAULT_SESSIONS_DIR, help=f"Folder under vault (default: {DEFAULT_SESSIONS_DIR}).")
     p.add_argument("--state", default=DEFAULT_STATE, help=f"Synced-state JSON path (default: {DEFAULT_STATE}).")
     p.add_argument("--max-body-chars", type=int, default=8000, help="Truncate body to ~N chars (default: 8000). Full transcript stays in the ctx DB.")
@@ -361,7 +360,17 @@ def run_write(ctx_bin: str, sessions: List[dict], pc_id: str, tz: ZoneInfo, labe
 
 def main() -> int:
     args = build_parser().parse_args()
+    config = load_config()
+    args.timezone = args.timezone or resolve_timezone(config)
     tz = ZoneInfo(args.timezone)
+    sessions_dir: Optional[Path] = None
+    if args.write:
+        # Fail before querying ctx when there is nowhere to write.
+        try:
+            sessions_dir = require_vault(args.vault, config) / args.sessions_dir
+        except ConfigError as exc:
+            print(f"ctx_to_obsidian_sessions.py: {exc}", file=sys.stderr)
+            return 2
     today = datetime.now(tz).strftime("%Y-%m-%d")
     since = args.since or today
     until = args.until or since
@@ -383,8 +392,7 @@ def main() -> int:
         print(f"No sessions {label}.", file=sys.stderr)
         return 0
 
-    if args.write:
-        sessions_dir = Path(args.vault).expanduser() / args.sessions_dir
+    if sessions_dir is not None:
         try:
             return run_write(
                 ctx_bin, sessions, args.pc_id, tz, label, sessions_dir,
