@@ -19,7 +19,10 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import List, Optional
 from zoneinfo import ZoneInfo
+
+from ctx_core import CtxError, calendar_date_bounds, session_refs_for_window
 
 HOME = Path.home()
 DEFAULT_CTX_BIN = str(HOME / ".local" / "bin" / "ctx")
@@ -31,7 +34,7 @@ START_MARKER = "<!-- ctx-daily-summary:start -->"
 END_MARKER = "<!-- ctx-daily-summary:end -->"
 HEADING_RE = re.compile(
     r"^## (user|assistant) - (message|summary) - "
-    r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)? UTC)$"
+    r"(\d{4}-\d{2}-\d{2}(?:T| )\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z| UTC|[+-]\d{2}:\d{2}))$"
 )
 FRONTMATTER_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$")
 
@@ -54,7 +57,7 @@ class Entry:
     session_id: str
 
 
-def find_binary(explicit: str | None, name: str, fallback: str) -> str:
+def find_binary(explicit: Optional[str], name: str, fallback: str) -> str:
     if explicit:
         path = Path(explicit).expanduser()
         if path.exists():
@@ -69,7 +72,7 @@ def find_binary(explicit: str | None, name: str, fallback: str) -> str:
     raise FileNotFoundError(f"{name} binary not found on PATH or at {fallback}")
 
 
-def run_command(args: list[str], *, timeout: int | None = None) -> str:
+def run_command(args: List[str], *, timeout: Optional[int] = None) -> str:
     proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     if proc.returncode != 0:
         raise RuntimeError(
@@ -107,7 +110,7 @@ def load_notes(sessions_dir: Path) -> list[NoteRecord]:
 
 
 def parse_utc_stamp(stamp: str) -> datetime:
-    return datetime.fromisoformat(stamp.replace(" UTC", "+00:00"))
+    return datetime.fromisoformat(stamp.replace(" UTC", "+00:00").replace("Z", "+00:00"))
 
 
 def shorten(text: str, limit: int) -> str:
@@ -188,28 +191,21 @@ def entries_from_markdown(
     return entries
 
 
-def day_range_ms(day_str: str, tz: ZoneInfo) -> tuple[int, int]:
-    day = datetime.strptime(day_str, "%Y-%m-%d").replace(tzinfo=tz)
-    return int(day.timestamp() * 1000), int((day + timedelta(days=1)).timestamp() * 1000)
-
-
-def local_sessions_for_day(ctx_bin: str, target_date: str, tz: ZoneInfo) -> list[dict[str, str]]:
-    start_ms, end_ms = day_range_ms(target_date, tz)
-    sql = (
-        "SELECT DISTINCT e.ctx_session_id, s.provider "
-        "FROM ctx_events e JOIN ctx_sessions s ON s.ctx_session_id = e.ctx_session_id "
-        f"WHERE e.occurred_at_ms >= {start_ms} AND e.occurred_at_ms < {end_ms} "
-        "AND e.ctx_session_id IS NOT NULL ORDER BY e.ctx_session_id"
-    )
-    out = run_command([ctx_bin, "sql", sql, "--format", "json", "--max-rows", "5000"])
-    data = json.loads(out)
-    columns = data.get("columns", [])
-    return [dict(zip(columns, row)) for row in data.get("rows", [])]
+def local_sessions_for_day(ctx_bin: str, target_date: str, tz: ZoneInfo) -> List[dict]:
+    start, end = calendar_date_bounds(target_date, target_date, tz)
+    return [
+        {
+            "ctx_session_id": ref.ctx_session_id,
+            "provider": ref.provider,
+            "provider_session_id": ref.provider_session_id,
+        }
+        for ref in session_refs_for_window(ctx_bin, start, end)
+    ]
 
 
 def collect_entries(
     *,
-    ctx_bin: str | None,
+    ctx_bin: Optional[str],
     notes: list[NoteRecord],
     target_date: str,
     tz: ZoneInfo,
@@ -227,7 +223,7 @@ def collect_entries(
     if ctx_bin:
         try:
             local_sessions = local_sessions_for_day(ctx_bin, target_date, tz)
-        except (RuntimeError, json.JSONDecodeError) as exc:
+        except (RuntimeError, CtxError) as exc:
             print(f"warn: local ctx query failed; using synced notes only: {exc}", file=sys.stderr)
             local_sessions = []
         for row in local_sessions:
@@ -348,7 +344,7 @@ def digest_prompt(source: str) -> str:
 """ + source
 
 
-def generate_digest(pi_bin: str, prompt: str, model: str | None, timeout: int) -> str:
+def generate_digest(pi_bin: str, prompt: str, model: Optional[str], timeout: int) -> str:
     command = [pi_bin, "--print", "--no-tools", "--no-session", "--thinking", "low"]
     if model:
         command.extend(["--model", model])

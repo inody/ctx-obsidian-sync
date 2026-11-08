@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Generate Obsidian session notes from the local ctx index.
+"""Generate Obsidian session notes from the local ctx Core index.
 
 Pipeline:
-  1. query ctx_sessions for the target day(s) (TZ-aware) via `ctx sql`
-  2. render each session as markdown: YAML frontmatter + cleaned
+  1. enumerate a complete calendar window with cursor-safe `ctx list events`
+  2. obtain stable metadata and event counts from `ctx show session --format json`
+  3. render each session as markdown: YAML frontmatter + cleaned
      `ctx show session --mode full --format markdown` body
 
 The ctx index is the single source of truth. This script only reads it.
@@ -27,11 +28,13 @@ import argparse
 import json
 import os
 import socket
-import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
+
+from ctx_core import CtxError, run_ctx, session_summaries_for_dates
 
 HOME = Path.home()
 DEFAULT_CTX_BIN = str(HOME / ".local" / "bin" / "ctx")
@@ -41,7 +44,7 @@ DEFAULT_SESSIONS_DIR = "ctx-sessions"
 DEFAULT_STATE = str(HOME / ".local" / "state" / "ctx-obsidian-sync" / "synced.json")
 
 
-def find_ctx_bin(explicit: str | None) -> str:
+def find_ctx_bin(explicit: Optional[str]) -> str:
     if explicit:
         if Path(explicit).exists():
             return explicit
@@ -53,20 +56,6 @@ def find_ctx_bin(explicit: str | None) -> str:
     if Path(DEFAULT_CTX_BIN).exists():
         return DEFAULT_CTX_BIN
     raise FileNotFoundError("ctx binary not found on PATH or at ~/.local/bin/ctx")
-
-
-def run_ctx(ctx_bin: str, args: list[str]) -> str:
-    proc = subprocess.run([ctx_bin, *args], capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(f"ctx {' '.join(args)} failed (rc={proc.returncode}):\n{proc.stderr}")
-    return proc.stdout
-
-
-def ctx_sql_rows(ctx_bin: str, sql: str) -> list[dict]:
-    out = run_ctx(ctx_bin, ["sql", sql, "--format", "json", "--max-rows", "5000"])
-    data = json.loads(out)
-    cols = data.get("columns", [])
-    return [dict(zip(cols, row)) for row in data.get("rows", [])]
 
 
 def session_markdown(ctx_bin: str, ctx_session_id: str) -> str:
@@ -130,7 +119,7 @@ def truncate_body(body: str, max_chars: int, session_id: str) -> str:
     )
 
 
-def short_path(path: str | None) -> str:
+def short_path(path: Optional[str]) -> str:
     if not path:
         return ""
     text = str(path)
@@ -168,35 +157,20 @@ def note_filename(row: dict, pc_id: str, tz: ZoneInfo) -> str:
     return f"{date}__{pc_id}__{row['provider']}__{sid8}.md"
 
 
-def day_range_ms(day_str: str, tz: ZoneInfo) -> tuple[int, int]:
-    day = datetime.strptime(day_str, "%Y-%m-%d").replace(tzinfo=tz)
-    start_ms = int(day.timestamp() * 1000)
-    end_ms = int((day + timedelta(days=1)).timestamp() * 1000)
-    return start_ms, end_ms
-
-
-def fetch_sessions(ctx_bin: str, since: str, until: str, provider: str | None, tz: ZoneInfo) -> list[dict]:
-    start_ms, _ = day_range_ms(since, tz)
-    _, end_ms = day_range_ms(until, tz)
-    clauses = [f"started_at_ms >= {start_ms}", f"started_at_ms < {end_ms}"]
-    if provider:
-        clauses.append(f"provider = '{provider}'")
-    where = " AND ".join(clauses)
-    sql = (
-        "SELECT s.ctx_session_id, s.provider, s.provider_session_id, s.started_at_ms, s.cwd, "
-        "(SELECT COUNT(*) FROM ctx_events e WHERE e.ctx_session_id = s.ctx_session_id) AS event_count "
-        f"FROM ctx_sessions s WHERE {where} ORDER BY s.started_at_ms ASC"
-    )
-    return ctx_sql_rows(ctx_bin, sql)
+def fetch_sessions(ctx_bin: str, since: str, until: str, provider: Optional[str], tz: ZoneInfo) -> List[dict]:
+    return session_summaries_for_dates(ctx_bin, since, until, provider, tz)
 
 
 def load_state(path: Path) -> dict:
     if not path.exists():
         return {"synced": {}}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"synced": {}}
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CtxError("cannot read sync state {}: {}".format(path, exc))
+    if not isinstance(state, dict) or not isinstance(state.get("synced", {}), dict):
+        raise CtxError("sync state has an invalid shape: {}".format(path))
+    return state
 
 
 def save_state(path: Path, state: dict) -> None:
@@ -206,7 +180,7 @@ def save_state(path: Path, state: dict) -> None:
     tmp.replace(path)
 
 
-def render_note(ctx_bin: str, row: dict, pc_id: str, tz: ZoneInfo, max_body_chars: int) -> str | None:
+def render_note(ctx_bin: str, row: dict, pc_id: str, tz: ZoneInfo, max_body_chars: int) -> Optional[str]:
     """Return the note text, or None if the session has no body (empty)."""
     body = clean_body(session_markdown(ctx_bin, row["ctx_session_id"]))
     if not body.strip():
@@ -232,60 +206,157 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def run_dry(ctx_bin: str, sessions: list[dict], pc_id: str, tz: ZoneInfo, label: str, max_body_chars: int) -> int:
-    parts: list[str] = []
+def run_dry(ctx_bin: str, sessions: List[dict], pc_id: str, tz: ZoneInfo, label: str, max_body_chars: int) -> int:
+    parts: List[str] = []
+    failed = 0
     for row in sessions:
         try:
             note = render_note(ctx_bin, row, pc_id, tz, max_body_chars)
-        except RuntimeError as exc:
+        except CtxError as exc:
             print(f"warn: skip {row['ctx_session_id']}: {exc}", file=sys.stderr)
+            failed += 1
             continue
         if note is None:
             continue
         parts.append(note.rstrip())
     sys.stdout.write("\n\n---\n\n".join(parts) + ("\n" if parts else ""))
-    print(f"[dry-run] {len(parts)} note(s) {label}", file=sys.stderr)
-    return 0
+    print(f"[dry-run] {len(parts)} note(s) failed={failed} {label}", file=sys.stderr)
+    return 1 if failed else 0
 
 
-def run_write(ctx_bin: str, sessions: list[dict], pc_id: str, tz: ZoneInfo, label: str,
+def note_frontmatter(path: Path) -> Dict[str, str]:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {}
+    if not lines or lines[0].strip() != "---":
+        return {}
+    meta: Dict[str, str] = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        meta[key.strip()] = value.strip().strip("\"'")
+    return meta
+
+
+def index_existing_notes(sessions_dir: Path) -> Tuple[Dict[str, List[Path]], Dict[Tuple[str, str], List[Path]], Dict[Path, Dict[str, str]]]:
+    by_session: Dict[str, List[Path]] = {}
+    by_provider_session: Dict[Tuple[str, str], List[Path]] = {}
+    metadata: Dict[Path, Dict[str, str]] = {}
+    if not sessions_dir.exists():
+        return by_session, by_provider_session, metadata
+    for path in sorted(sessions_dir.glob("*.md")):
+        meta = note_frontmatter(path)
+        metadata[path] = meta
+        session_id = meta.get("session_id")
+        if session_id:
+            by_session.setdefault(session_id, []).append(path)
+        provider = meta.get("provider")
+        provider_session_id = meta.get("provider_session_id")
+        if provider and provider_session_id:
+            by_provider_session.setdefault((provider, provider_session_id), []).append(path)
+    return by_session, by_provider_session, metadata
+
+
+def unique_note(paths: List[Path], identity: str) -> Optional[Path]:
+    unique = sorted(set(paths))
+    if len(unique) > 1:
+        raise CtxError("multiple existing notes match {}".format(identity))
+    return unique[0] if unique else None
+
+
+def run_write(ctx_bin: str, sessions: List[dict], pc_id: str, tz: ZoneInfo, label: str,
               sessions_dir: Path, state_path: Path, max_body_chars: int) -> int:
     state = load_state(state_path)
     synced = state.setdefault("synced", {})
+    reconciled_ids = state.setdefault("reconciled_session_ids", {})
     sessions_dir.mkdir(parents=True, exist_ok=True)
-    written = updated = skipped_synced = skipped_empty = failed = 0
+    by_session, by_provider_session, metadata = index_existing_notes(sessions_dir)
+    written = updated = reconciled = skipped_synced = skipped_empty = failed = 0
     for row in sessions:
         sid = row["ctx_session_id"]
         ev_count = int(row.get("event_count") or 0)
+        try:
+            path = unique_note(by_session.get(sid, []), "ctx session {}".format(sid))
+            if path is None and row.get("provider_session_id"):
+                native_key = (str(row["provider"]), str(row["provider_session_id"]))
+                path = unique_note(
+                    by_provider_session.get(native_key, []),
+                    "provider session {}/{}".format(*native_key),
+                )
+        except CtxError as exc:
+            print(f"warn: skip {sid}: {exc}", file=sys.stderr)
+            failed += 1
+            continue
+
+        previous_meta = metadata.get(path, {}) if path else {}
+        previous_sid = previous_meta.get("session_id")
         prev = synced.get(sid)
-        if isinstance(prev, dict) and prev.get("event_count") == ev_count:
+        if (
+            path is not None
+            and previous_sid == sid
+            and isinstance(prev, dict)
+            and prev.get("event_count") == ev_count
+        ):
             skipped_synced += 1
             continue
+
+        render_row = dict(row)
+        if not render_row.get("cwd") and previous_meta.get("cwd"):
+            render_row["cwd"] = previous_meta["cwd"]
         try:
-            note = render_note(ctx_bin, row, pc_id, tz, max_body_chars)
-        except RuntimeError as exc:
+            note = render_note(ctx_bin, render_row, pc_id, tz, max_body_chars)
+        except CtxError as exc:
             print(f"warn: skip {sid}: {exc}", file=sys.stderr)
             failed += 1
             continue
         if note is None:
             skipped_empty += 1
             continue
-        path = sessions_dir / note_filename(row, pc_id, tz)
+
+        existed = path is not None
+        if path is None:
+            path = sessions_dir / note_filename(render_row, pc_id, tz)
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(note, encoding="utf-8")
         tmp.replace(path)
-        synced[sid] = {"synced_at": datetime.now(timezone.utc).isoformat(), "event_count": ev_count}
-        if prev is None:
-            written += 1
-        else:
+        synced[sid] = {
+            "synced_at": datetime.now(timezone.utc).isoformat(),
+            "event_count": ev_count,
+            "provider": row["provider"],
+            "provider_session_id": row.get("provider_session_id"),
+            "note": path.name,
+        }
+        if previous_sid and previous_sid != sid:
+            reconciled_ids[previous_sid] = sid
+            reconciled += 1
+        new_meta = dict(previous_meta)
+        new_meta.update({
+            "session_id": sid,
+            "provider": str(row["provider"]),
+            "provider_session_id": str(row.get("provider_session_id") or ""),
+        })
+        metadata[path] = new_meta
+        by_session.setdefault(sid, []).append(path)
+        if row.get("provider_session_id"):
+            by_provider_session.setdefault(
+                (str(row["provider"]), str(row["provider_session_id"])), []
+            ).append(path)
+        if existed:
             updated += 1
+        else:
+            written += 1
     save_state(state_path, state)
     print(
-        f"[write] written={written} updated={updated} skipped_synced={skipped_synced} "
-        f"skipped_empty={skipped_empty} failed={failed} dir={sessions_dir} {label}",
+        f"[write] written={written} updated={updated} reconciled={reconciled} "
+        f"skipped_synced={skipped_synced} skipped_empty={skipped_empty} "
+        f"failed={failed} dir={sessions_dir} {label}",
         file=sys.stderr,
     )
-    return 0
+    return 1 if failed else 0
 
 
 def main() -> int:
@@ -304,7 +375,7 @@ def main() -> int:
 
     try:
         sessions = fetch_sessions(ctx_bin, since, until, args.provider, tz)
-    except (RuntimeError, json.JSONDecodeError) as exc:
+    except (CtxError, ValueError) as exc:
         print(f"ctx_to_obsidian_sessions.py: query failed: {exc}", file=sys.stderr)
         return 1
 
@@ -314,7 +385,14 @@ def main() -> int:
 
     if args.write:
         sessions_dir = Path(args.vault).expanduser() / args.sessions_dir
-        return run_write(ctx_bin, sessions, args.pc_id, tz, label, sessions_dir, Path(args.state).expanduser(), args.max_body_chars)
+        try:
+            return run_write(
+                ctx_bin, sessions, args.pc_id, tz, label, sessions_dir,
+                Path(args.state).expanduser(), args.max_body_chars,
+            )
+        except (CtxError, OSError) as exc:
+            print(f"ctx_to_obsidian_sessions.py: write failed: {exc}", file=sys.stderr)
+            return 1
     return run_dry(ctx_bin, sessions, args.pc_id, tz, label, args.max_body_chars)
 
 

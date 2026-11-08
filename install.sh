@@ -36,6 +36,7 @@ link_script() {
 }
 
 link_script "$repo_dir/bin/ctx_obsidian_sync.sh" "$HOME/bin/ctx_obsidian_sync.sh"
+link_script "$repo_dir/bin/ctx_core.py" "$HOME/bin/ctx_core.py"
 link_script "$repo_dir/bin/ctx_to_obsidian_sessions.py" "$HOME/bin/ctx_to_obsidian_sessions.py"
 link_script "$repo_dir/bin/ctx_daily_digest.sh" "$HOME/bin/ctx_daily_digest.sh"
 link_script "$repo_dir/bin/ctx_daily_digest.py" "$HOME/bin/ctx_daily_digest.py"
