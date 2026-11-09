@@ -26,7 +26,7 @@ The Python scripts may work when run manually on other Unix-like systems, but th
 Agent transcripts normally remain split across provider-specific history directories. This project gives them a consistent, searchable Markdown representation in Obsidian:
 
 - one generated note per ctx session under `<vault>/ctx-sessions/`;
-- stable frontmatter containing the date, host, provider, and session identifiers;
+- stable frontmatter containing the date, host, provider, session identifiers, and an optional project link;
 - incremental rewriting while a session gains events;
 - reconciliation by provider-native session ID if a ctx migration changes the public ctx session ID;
 - an optional marker-delimited summary in `<vault>/<diary-dir>/YYYY-MM-DD.md`.
@@ -166,6 +166,7 @@ Precedence is:
 | `CTX_OBSIDIAN_DIARY_TEMPLATE` | none | Vault-relative template for a new diary. Literal `{{date:YYYY-MM-DD}}` is replaced. |
 | `CTX_OBSIDIAN_LAUNCHD_PREFIX` | `local` | LaunchAgent label prefix. Read by `install.sh`; rerun it after changing this value. |
 | `CTX_DAILY_DIGEST_HOST` | empty | If set, only the host whose `hostname -s` matches this value runs the scheduled digest. |
+| `CTX_DAILY_DIGEST_DIARY_OFFSET_DAYS` | `0` | Diary date relative to the summarized conversation date. Use `1` to put yesterday's digest in today's diary. |
 | `CTX_DAILY_DIGEST_MODEL` | Pi default | Model pattern or ID passed to `pi --model`. |
 | `CTX_DAILY_DIGEST_LANGUAGE` | `en` | Built-in prompt and heading language: `en` or `ja`. |
 | `CTX_DAILY_DIGEST_PROMPT_FILE` | none | File containing custom digest instructions. |
@@ -179,7 +180,9 @@ CTX_OBSIDIAN_TZ=Europe/London
 CTX_OBSIDIAN_DIARY_DIR=Journal
 CTX_OBSIDIAN_DIARY_TEMPLATE=Templates/daily.md
 CTX_DAILY_DIGEST_HOST=my-laptop
+CTX_DAILY_DIGEST_DIARY_OFFSET_DAYS=1
 CTX_DAILY_DIGEST_LANGUAGE=en
+CTX_DAILY_DIGEST_HEADING="## Yesterday's Summary"
 ```
 
 `AI_OBSIDIAN_TZ` remains accepted as a legacy **environment variable**, not as a configuration-file key. `TZ` is also considered when no ctx-specific timezone is set.
@@ -225,6 +228,27 @@ Refresh ctx and export the rolling three-day window exactly as the hourly Launch
 
 The exporter records event counts in `~/.local/state/ctx-obsidian-sync/synced.json`. An unchanged session is skipped; a session with more events is rewritten. By default, the body of each note is shortened at approximately 8,000 characters. A truncated note points back to `ctx show session <id>` for the complete transcript.
 
+Before querying ctx in write mode, the exporter scans project notes under `<vault>/03_Projects/`. A project note with `project_id` and `roots` can classify sessions by exact `cwd` or a descendant directory:
+
+```yaml
+---
+type: project
+project_id: nlmfsp
+roots:
+  - "~/Dropbox/univ/nlmfsp"
+  - "/Users/another-user/Dropbox/univ/nlmfsp"
+---
+```
+
+Matching session notes receive:
+
+```yaml
+project_id: nlmfsp
+project: "[[prj_nlmfsp]]"
+```
+
+Existing generated session notes are refreshed in place without changing their transcript body. Longest-root matching allows a nested project to override a broader parent root. Duplicate project IDs or duplicate roots stop the write instead of guessing. Use `--projects-dir` if project notes live somewhere other than `03_Projects`.
+
 For a historical backfill, use `ctx import --all` if the index is not current, then run the Python exporter with explicit dates:
 
 ```bash
@@ -247,15 +271,19 @@ Call Pi and print the digest without writing:
 python3 ~/bin/ctx_daily_digest.py --date 2026-11-06
 ```
 
-Write or refresh a day:
+Write or refresh a summarized conversation date:
 
 ```bash
 python3 ~/bin/ctx_daily_digest.py --write --date 2026-11-06
 ```
 
+With the default offset `0`, this writes to `2026-11-06.md`. With `CTX_DAILY_DIGEST_DIARY_OFFSET_DAYS=1`, it writes the November 6 digest to `2026-11-07.md`.
+
 The digest uses exact local ctx transcripts when available and falls back to synced `ctx-sessions` notes, including notes from other computers. Messages are selected by event timestamp in the configured timezone, not by the session's start date.
 
-If a diary does not exist, the script uses the configured template. Without a template it creates frontmatter plus a minimal `## Memo` section. In `--write` mode, a day with no agent messages is recorded in state without creating or modifying a diary note.
+If the destination diary does not exist, the script uses the configured template and substitutes the destination date. Without a template it creates frontmatter plus a minimal `## Memo` section. In `--write` mode, a summarized day with no agent messages is recorded in state without creating or modifying a diary note.
+
+For a next-day section, set the offset to `1`, set `CTX_DAILY_DIGEST_HEADING` to the desired heading, and place the digest markers near the top of the diary template. The model's first Markdown H2 is normalized to the configured heading, so a built-in prompt cannot leave a duplicate language-specific heading. Rolling lookback refreshes skip dates previously tracked with another offset, preventing an offset change from silently migrating older summaries.
 
 ### Multiple computers
 

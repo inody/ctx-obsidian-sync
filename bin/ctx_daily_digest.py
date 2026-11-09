@@ -484,6 +484,19 @@ def digest_prompt(source: str, instructions: str) -> str:
     return instructions + source
 
 
+def normalize_digest_heading(result: str, heading: str) -> str:
+    if not heading:
+        return result
+    lines = result.splitlines()
+    first = next((index for index, line in enumerate(lines) if line.strip()), None)
+    if first is not None and lines[first].lstrip().startswith("## "):
+        lines[first] = heading
+        return "\n".join(lines)
+    if result.startswith(heading):
+        return result
+    return heading + "\n\n" + result
+
+
 def generate_digest(pi_bin: str, prompt: str, model: Optional[str], timeout: int, heading: str) -> str:
     command = [pi_bin, "--print", "--no-tools", "--no-session", "--thinking", "low"]
     if model:
@@ -492,9 +505,7 @@ def generate_digest(pi_bin: str, prompt: str, model: Optional[str], timeout: int
     result = run_command(command, timeout=timeout, env=agent_runtime_env()).strip()
     if not result:
         raise RuntimeError("Pi returned an empty digest")
-    if heading and not result.startswith(heading):
-        result = heading + "\n\n" + result
-    return result
+    return normalize_digest_heading(result, heading)
 
 
 def load_state(path: Path) -> dict:
@@ -570,6 +581,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pi-bin")
     parser.add_argument("--model", help="Pi model (default: CTX_DAILY_DIGEST_MODEL, else the Pi default).")
     parser.add_argument(
+        "--diary-offset-days",
+        type=int,
+        help="Diary date offset from the summarized date (default: CTX_DAILY_DIGEST_DIARY_OFFSET_DAYS or 0).",
+    )
+    parser.add_argument(
         "--language",
         choices=sorted(LANGUAGES),
         help=f"Built-in digest language (default: CTX_DAILY_DIGEST_LANGUAGE or {DEFAULT_DIGEST_LANGUAGE}).",
@@ -601,6 +617,18 @@ def main() -> int:
     diary_dir = args.diary_dir or setting("CTX_OBSIDIAN_DIARY_DIR", config) or DEFAULT_DIARY_DIR
     template = args.template if args.template is not None else setting("CTX_OBSIDIAN_DIARY_TEMPLATE", config, "")
     model = args.model or setting("CTX_DAILY_DIGEST_MODEL", config) or None
+    offset_setting = setting("CTX_DAILY_DIGEST_DIARY_OFFSET_DAYS", config, "0")
+    try:
+        diary_offset_days = args.diary_offset_days if args.diary_offset_days is not None else int(offset_setting or "0")
+    except ValueError:
+        print(
+            f"ctx_daily_digest.py: invalid CTX_DAILY_DIGEST_DIARY_OFFSET_DAYS: {offset_setting!r}",
+            file=sys.stderr,
+        )
+        return 2
+    if not -366 <= diary_offset_days <= 366:
+        print("ctx_daily_digest.py: --diary-offset-days must be between -366 and 366", file=sys.stderr)
+        return 2
     language_code = args.language or setting("CTX_DAILY_DIGEST_LANGUAGE", config) or DEFAULT_DIGEST_LANGUAGE
     if language_code not in LANGUAGES:
         print(
@@ -616,7 +644,7 @@ def main() -> int:
     prompt_file = args.prompt_file or setting("CTX_DAILY_DIGEST_PROMPT_FILE", config)
     target_date = args.date or (datetime.now(tz) - timedelta(days=1)).strftime("%Y-%m-%d")
     try:
-        datetime.strptime(target_date, "%Y-%m-%d")
+        target_day = datetime.strptime(target_date, "%Y-%m-%d")
     except ValueError:
         print(f"invalid --date: {target_date}", file=sys.stderr)
         return 2
@@ -629,8 +657,20 @@ def main() -> int:
     state_path = Path(args.state).expanduser()
     state = load_state(state_path)
     tracked = state.setdefault("dates", {})
+    existing = tracked.get(target_date, {}) if isinstance(tracked.get(target_date), dict) else {}
+    existing_offset = existing.get("diary_offset_days", 0)
+    try:
+        existing_offset = int(existing_offset)
+    except (TypeError, ValueError):
+        existing_offset = 0
     if args.only_if_tracked and target_date not in tracked:
         print(f"[skip] {target_date}: not previously tracked", file=sys.stderr)
+        return 0
+    if args.only_if_tracked and existing_offset != diary_offset_days:
+        print(
+            f"[skip] {target_date}: tracked with diary offset {existing_offset}, current offset is {diary_offset_days}",
+            file=sys.stderr,
+        )
         return 0
 
     try:
@@ -655,9 +695,12 @@ def main() -> int:
         return 0
 
     source_hash = hashlib.sha256(source.encode("utf-8")).hexdigest()
-    diary_path = vault / diary_dir / f"{target_date}.md"
-    existing = tracked.get(target_date, {}) if isinstance(tracked.get(target_date), dict) else {}
+    diary_date = (target_day + timedelta(days=diary_offset_days)).strftime("%Y-%m-%d")
+    diary_path = vault / diary_dir / f"{diary_date}.md"
     markers_present = diary_path.exists() and START_MARKER in diary_path.read_text(encoding="utf-8", errors="replace")
+    same_destination = (
+        existing_offset == diary_offset_days and existing.get("diary") == str(diary_path)
+    )
 
     if not entries:
         if args.write:
@@ -665,6 +708,8 @@ def main() -> int:
                 "source_hash": source_hash,
                 "entry_count": 0,
                 "checked_at": datetime.now(timezone.utc).isoformat(),
+                "diary_date": diary_date,
+                "diary_offset_days": diary_offset_days,
             }
             save_state(state_path, state)
         print(f"[skip] {target_date}: no agent messages", file=sys.stderr)
@@ -674,6 +719,7 @@ def main() -> int:
         args.write
         and not args.force
         and existing.get("source_hash") == source_hash
+        and same_destination
         and markers_present
     ):
         print(f"[skip] {target_date}: source unchanged ({len(entries)} messages)", file=sys.stderr)
@@ -696,7 +742,7 @@ def main() -> int:
 
     try:
         template_path = vault / template if template else None
-        update_diary(diary_path, template_path, target_date, digest)
+        update_diary(diary_path, template_path, diary_date, digest)
     except (OSError, RuntimeError) as exc:
         print(f"ctx_daily_digest.py: diary update failed: {exc}", file=sys.stderr)
         return 1
@@ -706,10 +752,15 @@ def main() -> int:
         "entry_count": len(entries),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "diary": str(diary_path),
+        "diary_date": diary_date,
+        "diary_offset_days": diary_offset_days,
         "model": model or "pi-default",
     }
     save_state(state_path, state)
-    print(f"[write] {target_date}: {len(entries)} messages -> {diary_path}", file=sys.stderr)
+    print(
+        f"[write] source={target_date}: {len(entries)} messages -> diary={diary_path}",
+        file=sys.stderr,
+    )
     return 0
 
 

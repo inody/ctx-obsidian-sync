@@ -28,6 +28,10 @@
 # on this host (compare with `hostname -s`). Default: no restriction.
 #CTX_DAILY_DIGEST_HOST=my-laptop
 
+# Diary date relative to the summarized conversation date. Default: 0 writes
+# into the same day's diary; 1 writes yesterday's digest into today's diary.
+#CTX_DAILY_DIGEST_DIARY_OFFSET_DAYS=0
+
 # Pi model for the digest. Default: Pi's configured default model.
 #CTX_DAILY_DIGEST_MODEL=
 

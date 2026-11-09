@@ -166,6 +166,53 @@ class ReconciliationTests(unittest.TestCase):
             ctx_to_obsidian_sessions.unique_note([Path("a"), Path("b")], "provider session")
 
 
+class ProjectLinkTests(unittest.TestCase):
+    def test_project_notes_map_cwd_by_longest_root(self):
+        projects = [
+            ctx_to_obsidian_sessions.ProjectRef("parent", "prj_parent", ("~/work",)),
+            ctx_to_obsidian_sessions.ProjectRef("child", "prj_child", ("~/work/child",)),
+        ]
+        project = ctx_to_obsidian_sessions.project_for_cwd("~/work/child/src", projects)
+        self.assertEqual(project.project_id, "child")
+
+    def test_refresh_adds_project_metadata_without_touching_body(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            projects_dir = root / "03_Projects"
+            sessions_dir = root / "ctx-sessions"
+            projects_dir.mkdir()
+            sessions_dir.mkdir()
+            (projects_dir / "prj_nlmfsp.md").write_text(
+                "---\nproject_id: nlmfsp\nroots:\n  - \"~/Dropbox/univ/nlmfsp\"\n---\n",
+                encoding="utf-8",
+            )
+            note = sessions_dir / "session.md"
+            note.write_text(
+                "---\ndate: 2026-01-01\ncwd: ~/Dropbox/univ/nlmfsp/latex\nsession_id: s1\n---\n\nbody\n",
+                encoding="utf-8",
+            )
+            projects = ctx_to_obsidian_sessions.load_projects(projects_dir)
+            updated, failed = ctx_to_obsidian_sessions.refresh_project_links(
+                sessions_dir, projects
+            )
+            self.assertEqual((updated, failed), (1, 0))
+            text = note.read_text(encoding="utf-8")
+            self.assertIn("project_id: nlmfsp", text)
+            self.assertIn('project: "[[prj_nlmfsp]]"', text)
+            self.assertTrue(text.endswith("\n\nbody\n"))
+
+    def test_duplicate_project_root_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            projects_dir = Path(temp)
+            for name, project_id in (("a.md", "a"), ("b.md", "b")):
+                (projects_dir / name).write_text(
+                    "---\nproject_id: {}\nroots:\n  - ~/same\n---\n".format(project_id),
+                    encoding="utf-8",
+                )
+            with self.assertRaises(ctx_core.CtxError):
+                ctx_to_obsidian_sessions.load_projects(projects_dir)
+
+
 class WrapperImportOutcomeTests(unittest.TestCase):
     def run_wrapper(self, outcome, import_rc):
         with tempfile.TemporaryDirectory() as temp:
@@ -245,6 +292,7 @@ OBSIDIAN_VAULT=~/Notes/My Vault
 export CTX_OBSIDIAN_TZ="Asia/Tokyo"
 CTX_OBSIDIAN_DIARY_DIR=Journal  # trailing comment
 CTX_DAILY_DIGEST_HOST='host#1'
+CTX_DAILY_DIGEST_DIARY_OFFSET_DAYS=1
 CTX_DAILY_DIGEST_LANGUAGE=en
 CTX_DAILY_DIGEST_LANGUAGE=ja
 UNKNOWN_KEY=1
@@ -261,6 +309,7 @@ class ConfigTests(unittest.TestCase):
             "CTX_OBSIDIAN_TZ": "Asia/Tokyo",
             "CTX_OBSIDIAN_DIARY_DIR": "Journal",
             "CTX_DAILY_DIGEST_HOST": "host#1",
+            "CTX_DAILY_DIGEST_DIARY_OFFSET_DAYS": "1",
             "CTX_DAILY_DIGEST_LANGUAGE": "ja",
         })
 
@@ -275,7 +324,8 @@ class ConfigTests(unittest.TestCase):
             script = (
                 f'source "{ROOT / "bin" / "ctx_config.sh"}"; ctx_config_load; '
                 'for k in OBSIDIAN_VAULT CTX_OBSIDIAN_TZ CTX_OBSIDIAN_DIARY_DIR '
-                'CTX_DAILY_DIGEST_HOST CTX_DAILY_DIGEST_LANGUAGE UNKNOWN_KEY; '
+                'CTX_DAILY_DIGEST_HOST CTX_DAILY_DIGEST_DIARY_OFFSET_DAYS '
+                'CTX_DAILY_DIGEST_LANGUAGE UNKNOWN_KEY; '
                 'do printf "%s=%s\\n" "$k" "${!k-<unset>}"; done'
             )
             proc = subprocess.run(
@@ -286,6 +336,7 @@ class ConfigTests(unittest.TestCase):
             "CTX_OBSIDIAN_TZ=Asia/Tokyo",
             "CTX_OBSIDIAN_DIARY_DIR=Journal",
             "CTX_DAILY_DIGEST_HOST=",
+            "CTX_DAILY_DIGEST_DIARY_OFFSET_DAYS=1",
             "CTX_DAILY_DIGEST_LANGUAGE=ja",
             "UNKNOWN_KEY=<unset>",
         ])
@@ -375,6 +426,12 @@ class DigestLanguageTests(unittest.TestCase):
     def test_languages_have_distinct_headings(self):
         self.assertEqual(ctx_daily_digest.LANGUAGES["ja"].heading, "## AIエージェントとの作業まとめ")
         self.assertTrue(ctx_daily_digest.LANGUAGES["en"].prompt.startswith("You are"))
+
+    def test_configured_heading_replaces_model_h2(self):
+        result = ctx_daily_digest.normalize_digest_heading(
+            "## AIエージェントとの作業まとめ\n\n本文", "## Yesterday's Summary"
+        )
+        self.assertEqual(result, "## Yesterday's Summary\n\n本文")
 
 
 if __name__ == "__main__":
