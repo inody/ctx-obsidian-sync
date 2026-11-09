@@ -349,6 +349,24 @@ class DigestHostTests(unittest.TestCase):
         self.assertIn("[skip]", proc.stderr)
 
 
+class AgentRuntimeTests(unittest.TestCase):
+    def test_finds_newest_fnm_node_outside_launchd_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            older = home / ".local/share/fnm/node-versions/v20.1.0/installation/bin"
+            newer = home / ".local/share/fnm/node-versions/v25.3.0/installation/bin"
+            older.mkdir(parents=True)
+            newer.mkdir(parents=True)
+            (older / "node").write_text("", encoding="utf-8")
+            (newer / "node").write_text("", encoding="utf-8")
+            with mock.patch.object(ctx_daily_digest, "HOME", home), mock.patch.dict(
+                os.environ, {"PATH": "/usr/bin:/bin"}, clear=True
+            ):
+                env = ctx_daily_digest.agent_runtime_env()
+            self.assertEqual(env["PATH"].split(os.pathsep)[0], str(newer))
+            self.assertTrue(env["PATH"].endswith("/usr/bin:/bin"))
+
+
 class DigestLanguageTests(unittest.TestCase):
     def test_prompt_file_placeholder(self):
         self.assertEqual(ctx_daily_digest.digest_prompt("LOG", "before {{source}} after"), "before LOG after")

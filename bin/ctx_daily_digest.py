@@ -170,8 +170,59 @@ def find_binary(explicit: Optional[str], name: str, fallback: str) -> str:
     raise FileNotFoundError(f"{name} binary not found on PATH or at {fallback}")
 
 
-def run_command(args: List[str], *, timeout: Optional[int] = None) -> str:
-    proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+def agent_runtime_env() -> Dict[str, str]:
+    """Return an environment that can launch Node-based agent CLIs from launchd.
+
+    GUI jobs do not load shell version-manager setup. Prefer Pi's managed Node,
+    then installed fnm/nvm runtimes, while retaining the caller's PATH.
+    """
+    env = dict(os.environ)
+
+    def version_key(path: Path) -> tuple[int, ...]:
+        numbers = re.findall(r"\d+", str(path))
+        return tuple(int(number) for number in numbers)
+
+    candidates = [HOME / ".local" / "share" / "pi-node" / "current" / "bin"]
+    candidates.extend(
+        sorted(
+            (path.parent for path in (HOME / ".local" / "share" / "fnm" / "node-versions").glob("*/installation/bin/node")),
+            key=version_key,
+            reverse=True,
+        )
+    )
+    candidates.extend(
+        sorted(
+            (path.parent for path in (HOME / ".nvm" / "versions" / "node").glob("*/bin/node")),
+            key=version_key,
+            reverse=True,
+        )
+    )
+    candidates.extend(
+        [
+            HOME / ".volta" / "bin",
+            HOME / ".local" / "share" / "mise" / "shims",
+            HOME / ".asdf" / "shims",
+            Path("/opt/homebrew/bin"),
+            Path("/usr/local/bin"),
+        ]
+    )
+    current = env.get("PATH", "").split(os.pathsep)
+    path_parts: List[str] = []
+    for candidate in candidates:
+        value = str(candidate)
+        if candidate.is_dir() and value not in path_parts:
+            path_parts.append(value)
+    for value in current:
+        if value and value not in path_parts:
+            path_parts.append(value)
+    env["PATH"] = os.pathsep.join(path_parts)
+    return env
+
+
+def run_command(
+    args: List[str], *, timeout: Optional[int] = None, env: Optional[Dict[str, str]] = None
+) -> str:
+    proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
     if proc.returncode != 0:
         raise RuntimeError(
             f"command failed (rc={proc.returncode}): {' '.join(args[:5])}\n{proc.stderr.strip()}"
@@ -438,7 +489,7 @@ def generate_digest(pi_bin: str, prompt: str, model: Optional[str], timeout: int
     if model:
         command.extend(["--model", model])
     command.append(prompt)
-    result = run_command(command, timeout=timeout).strip()
+    result = run_command(command, timeout=timeout, env=agent_runtime_env()).strip()
     if not result:
         raise RuntimeError("Pi returned an empty digest")
     if heading and not result.startswith(heading):

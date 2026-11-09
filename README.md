@@ -472,7 +472,7 @@ pi
 python3 ~/bin/ctx_daily_digest.py --date 2026-11-06
 ```
 
-Typical causes are missing provider authentication, an invalid model name, an unreadable custom prompt, a timeout, or unavailable synchronized session notes.
+Typical causes are missing provider authentication, an invalid model name, an unreadable custom prompt, a timeout, or unavailable synchronized session notes. For launchd jobs, the digest also adds common Pi, fnm, nvm, Volta, mise, asdf, Homebrew, and `/usr/local` runtime directories to `PATH`, because GUI jobs do not load interactive shell version-manager setup.
 
 ### Duplicate session match or duplicate digest markers
 
