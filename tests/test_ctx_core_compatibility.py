@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import io
 import json
 import os
 import shutil
@@ -17,6 +18,7 @@ sys.path.insert(0, str(ROOT / "bin"))
 import ctx_config
 import ctx_core
 import ctx_daily_digest
+import ctx_obsidian_doctor
 import ctx_to_obsidian_sessions
 
 
@@ -257,6 +259,67 @@ class ProjectLinkTests(unittest.TestCase):
                 )
             with self.assertRaises(ctx_core.CtxError):
                 ctx_to_obsidian_sessions.load_projects(projects_dir)
+
+
+class VaultDoctorTests(unittest.TestCase):
+    def test_valid_vault_contract_passes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            vault = Path(temp)
+            projects = vault / "03_Projects"
+            sessions = vault / "ctx-sessions"
+            templates = vault / "Templates"
+            projects.mkdir()
+            sessions.mkdir()
+            templates.mkdir()
+            (projects / "prj_example.md").write_text(
+                "---\nproject_id: example\nroots:\n  - ~/work/example\n---\n",
+                encoding="utf-8",
+            )
+            (templates / "daily.md").write_text(
+                "<!-- ctx-daily-summary:start -->\n"
+                "## Summary\n"
+                "<!-- ctx-daily-summary:end -->\n",
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            rc = ctx_obsidian_doctor.check_vault(
+                vault,
+                {"CTX_OBSIDIAN_DIARY_TEMPLATE": "Templates/daily.md"},
+                out=output,
+            )
+        self.assertEqual(rc, 0, output.getvalue())
+        self.assertIn("[result] ok", output.getvalue())
+
+    def test_invalid_diary_marker_pair_fails(self):
+        with tempfile.TemporaryDirectory() as temp:
+            vault = Path(temp)
+            (vault / "03_Projects").mkdir()
+            template = vault / "daily.md"
+            template.write_text(
+                "<!-- ctx-daily-summary:start -->\nmissing end\n",
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            rc = ctx_obsidian_doctor.check_vault(
+                vault, {}, diary_template="daily.md", out=output
+            )
+        self.assertEqual(rc, 1)
+        self.assertIn("exactly one ordered summary marker pair", output.getvalue())
+
+    def test_duplicate_project_root_fails(self):
+        with tempfile.TemporaryDirectory() as temp:
+            vault = Path(temp)
+            projects = vault / "03_Projects"
+            projects.mkdir()
+            for name, project_id in (("a.md", "a"), ("b.md", "b")):
+                (projects / name).write_text(
+                    "---\nproject_id: {}\nroots:\n  - ~/same\n---\n".format(project_id),
+                    encoding="utf-8",
+                )
+            output = io.StringIO()
+            rc = ctx_obsidian_doctor.check_vault(vault, {}, out=output)
+        self.assertEqual(rc, 1)
+        self.assertIn("duplicate project root", output.getvalue())
 
 
 class WrapperImportOutcomeTests(unittest.TestCase):

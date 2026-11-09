@@ -106,7 +106,7 @@ The installer creates this file on first run and never overwrites it:
 Edit it and set at least the vault path:
 
 ```sh
-OBSIDIAN_VAULT=~/Dropbox/Obsidian/MyVault
+OBSIDIAN_VAULT=~/Obsidian/MyVault
 ```
 
 Run the session job once in the foreground:
@@ -116,6 +116,14 @@ Run the session job once in the foreground:
 ```
 
 That command refreshes ctx and writes sessions with events from today and the previous two local calendar days. Check `<vault>/ctx-sessions/` before continuing.
+
+Validate the Obsidian-side project definitions and diary marker contract:
+
+```bash
+python3 ~/bin/ctx_obsidian_doctor.py
+```
+
+Generic Obsidian examples are available under [`examples/obsidian/`](examples/obsidian/). They are optional starting points rather than files installed into the vault.
 
 If you want daily summaries, first inspect the source that would be sent to Pi, then test a dry run. Both commands default to yesterday:
 
@@ -175,7 +183,7 @@ Precedence is:
 Example:
 
 ```sh
-OBSIDIAN_VAULT=~/Dropbox/Obsidian/MyVault
+OBSIDIAN_VAULT=~/Obsidian/MyVault
 CTX_OBSIDIAN_TZ=Europe/London
 CTX_OBSIDIAN_DIARY_DIR=Journal
 CTX_OBSIDIAN_DIARY_TEMPLATE=Templates/daily.md
@@ -251,6 +259,14 @@ project: "[[prj_example-project]]"
 ```
 
 Existing generated session notes are refreshed in place without changing their transcript body. Longest-match selection applies across exact roots and prefixes, so a nested exact root can override a broader campaign prefix. Duplicate project IDs, duplicate roots, duplicate prefixes, or equal-length ambiguity stop the write instead of guessing. Prefixes are plain string prefixes, not regular expressions or AI classification. Use `--projects-dir` if project notes live somewhere other than `03_Projects`.
+
+Run the contract checker after changing project notes or the diary template:
+
+```bash
+python3 ~/bin/ctx_obsidian_doctor.py
+```
+
+It checks duplicate project definitions, reports projects without match paths, verifies the session output directory, and requires exactly one ordered daily-summary marker pair when a diary template is configured. See [`examples/obsidian/`](examples/obsidian/) for generic project, diary, and Workspace Inbox notes.
 
 For a historical backfill, use `ctx import --all` if the index is not current, then run the Python exporter with explicit dates:
 
@@ -388,6 +404,7 @@ rm -f \
   ~/bin/ctx_config.py \
   ~/bin/ctx_config.sh \
   ~/bin/ctx_to_obsidian_sessions.py \
+  ~/bin/ctx_obsidian_doctor.py \
   ~/bin/ctx_daily_digest.sh \
   ~/bin/ctx_daily_digest.py \
   ~/bin/README.ctx-obsidian-sync.md
