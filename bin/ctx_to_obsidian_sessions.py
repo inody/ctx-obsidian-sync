@@ -50,6 +50,7 @@ class ProjectRef:
     project_id: str
     note: str
     roots: Tuple[str, ...]
+    root_prefixes: Tuple[str, ...] = ()
 
 
 def yaml_scalar(value: str) -> str:
@@ -65,15 +66,20 @@ def project_from_note(path: Path) -> Optional[ProjectRef]:
         return None
     project_id = ""
     roots: List[str] = []
+    root_prefixes: List[str] = []
     list_key = ""
     for line in lines[1:]:
         if line.strip() == "---":
             break
         stripped = line.strip()
-        if stripped.startswith("-") and list_key == "roots":
-            root = yaml_scalar(stripped[1:]).rstrip("/")
-            if root:
-                roots.append(root)
+        if stripped.startswith("-") and list_key in {"roots", "root_prefixes"}:
+            value = yaml_scalar(stripped[1:])
+            if list_key == "roots":
+                value = value.rstrip("/")
+                if value:
+                    roots.append(value)
+            elif value:
+                root_prefixes.append(value)
             continue
         if ":" not in line:
             continue
@@ -85,7 +91,12 @@ def project_from_note(path: Path) -> Optional[ProjectRef]:
             project_id = yaml_scalar(value)
     if not project_id:
         return None
-    return ProjectRef(project_id=project_id, note=path.stem, roots=tuple(roots))
+    return ProjectRef(
+        project_id=project_id,
+        note=path.stem,
+        roots=tuple(roots),
+        root_prefixes=tuple(root_prefixes),
+    )
 
 
 def load_projects(projects_dir: Path) -> List[ProjectRef]:
@@ -94,6 +105,7 @@ def load_projects(projects_dir: Path) -> List[ProjectRef]:
     projects: List[ProjectRef] = []
     ids: Dict[str, Path] = {}
     roots: Dict[str, Path] = {}
+    root_prefixes: Dict[str, Path] = {}
     for path in sorted(projects_dir.glob("*.md")):
         project = project_from_note(path)
         if project is None:
@@ -109,6 +121,14 @@ def load_projects(projects_dir: Path) -> List[ProjectRef]:
             if root in roots:
                 raise CtxError("duplicate project root {} in {} and {}".format(root, roots[root], path))
             roots[root] = path
+        for prefix in project.root_prefixes:
+            if prefix in root_prefixes:
+                raise CtxError(
+                    "duplicate project root prefix {} in {} and {}".format(
+                        prefix, root_prefixes[prefix], path
+                    )
+                )
+            root_prefixes[prefix] = path
         projects.append(project)
     return projects
 
@@ -122,6 +142,12 @@ def project_for_cwd(cwd: Optional[str], projects: List[ProjectRef]) -> Optional[
         for root in project.roots
         if cwd == root or cwd.startswith(root + "/")
     ]
+    matches.extend(
+        (len(prefix), project)
+        for project in projects
+        for prefix in project.root_prefixes
+        if cwd.startswith(prefix)
+    )
     if not matches:
         return None
     longest = max(length for length, _project in matches)

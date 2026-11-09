@@ -175,6 +175,39 @@ class ProjectLinkTests(unittest.TestCase):
         project = ctx_to_obsidian_sessions.project_for_cwd("~/work/child/src", projects)
         self.assertEqual(project.project_id, "child")
 
+    def test_project_notes_map_cwd_by_longest_root_prefix(self):
+        projects = [
+            ctx_to_obsidian_sessions.ProjectRef(
+                "campaigns", "prj_campaigns", (), ("~/work/project-",)
+            ),
+            ctx_to_obsidian_sessions.ProjectRef(
+                "specific", "prj_specific", ("~/work/project-special",)
+            ),
+        ]
+        campaign = ctx_to_obsidian_sessions.project_for_cwd(
+            "~/work/project-run-1/results", projects
+        )
+        specific = ctx_to_obsidian_sessions.project_for_cwd(
+            "~/work/project-special/src", projects
+        )
+        self.assertEqual(campaign.project_id, "campaigns")
+        self.assertEqual(specific.project_id, "specific")
+
+    def test_project_note_loads_root_prefixes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            projects_dir = Path(temp)
+            (projects_dir / "prj_campaign.md").write_text(
+                "---\nproject_id: campaign\nroots:\n  - ~/work/project\n"
+                "root_prefixes:\n  - ~/work/project-\n  - ~/work/project_\n---\n",
+                encoding="utf-8",
+            )
+            project = ctx_to_obsidian_sessions.load_projects(projects_dir)[0]
+            self.assertEqual(project.roots, ("~/work/project",))
+            self.assertEqual(
+                project.root_prefixes,
+                ("~/work/project-", "~/work/project_"),
+            )
+
     def test_refresh_adds_project_metadata_without_touching_body(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -182,13 +215,13 @@ class ProjectLinkTests(unittest.TestCase):
             sessions_dir = root / "ctx-sessions"
             projects_dir.mkdir()
             sessions_dir.mkdir()
-            (projects_dir / "prj_nlmfsp.md").write_text(
-                "---\nproject_id: nlmfsp\nroots:\n  - \"~/Dropbox/univ/nlmfsp\"\n---\n",
+            (projects_dir / "prj_example.md").write_text(
+                "---\nproject_id: example\nroots:\n  - \"~/work/example\"\n---\n",
                 encoding="utf-8",
             )
             note = sessions_dir / "session.md"
             note.write_text(
-                "---\ndate: 2026-01-01\ncwd: ~/Dropbox/univ/nlmfsp/latex\nsession_id: s1\n---\n\nbody\n",
+                "---\ndate: 2026-01-01\ncwd: ~/work/example/paper\nsession_id: s1\n---\n\nbody\n",
                 encoding="utf-8",
             )
             projects = ctx_to_obsidian_sessions.load_projects(projects_dir)
@@ -197,9 +230,22 @@ class ProjectLinkTests(unittest.TestCase):
             )
             self.assertEqual((updated, failed), (1, 0))
             text = note.read_text(encoding="utf-8")
-            self.assertIn("project_id: nlmfsp", text)
-            self.assertIn('project: "[[prj_nlmfsp]]"', text)
+            self.assertIn("project_id: example", text)
+            self.assertIn('project: "[[prj_example]]"', text)
             self.assertTrue(text.endswith("\n\nbody\n"))
+
+    def test_duplicate_project_root_prefix_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            projects_dir = Path(temp)
+            for name, project_id in (("a.md", "a"), ("b.md", "b")):
+                (projects_dir / name).write_text(
+                    "---\nproject_id: {}\nroot_prefixes:\n  - ~/same-\n---\n".format(
+                        project_id
+                    ),
+                    encoding="utf-8",
+                )
+            with self.assertRaises(ctx_core.CtxError):
+                ctx_to_obsidian_sessions.load_projects(projects_dir)
 
     def test_duplicate_project_root_fails_closed(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -1,4 +1,4 @@
-# ctx → Obsidian session sync
+# ctx → Obsidian session sync and daily digest
 
 `ctx-obsidian-sync` exports coding-agent conversations indexed by [ctx](https://ctx.rs) into an Obsidian vault. It can also ask [Pi](https://pi.dev) to turn one day of conversations into a short diary summary.
 
@@ -228,26 +228,29 @@ Refresh ctx and export the rolling three-day window exactly as the hourly Launch
 
 The exporter records event counts in `~/.local/state/ctx-obsidian-sync/synced.json`. An unchanged session is skipped; a session with more events is rewritten. By default, the body of each note is shortened at approximately 8,000 characters. A truncated note points back to `ctx show session <id>` for the complete transcript.
 
-Before querying ctx in write mode, the exporter scans project notes under `<vault>/03_Projects/`. A project note with `project_id` and `roots` can classify sessions by exact `cwd` or a descendant directory:
+Before querying ctx in write mode, the exporter scans project notes under `<vault>/03_Projects/`. A project note with `project_id` and `roots` can classify sessions by exact `cwd` or a descendant directory. Optional `root_prefixes` classify disposable experiment workspaces that share a deterministic naming prefix:
 
 ```yaml
 ---
 type: project
-project_id: nlmfsp
+project_id: example-project
 roots:
-  - "~/Dropbox/univ/nlmfsp"
-  - "/Users/another-user/Dropbox/univ/nlmfsp"
+  - "~/work/example-project"
+  - "/Users/another-user/work/example-project"
+root_prefixes:
+  - "~/work/example-project-"
+  - "~/work/example-project_"
 ---
 ```
 
 Matching session notes receive:
 
 ```yaml
-project_id: nlmfsp
-project: "[[prj_nlmfsp]]"
+project_id: example-project
+project: "[[prj_example-project]]"
 ```
 
-Existing generated session notes are refreshed in place without changing their transcript body. Longest-root matching allows a nested project to override a broader parent root. Duplicate project IDs or duplicate roots stop the write instead of guessing. Use `--projects-dir` if project notes live somewhere other than `03_Projects`.
+Existing generated session notes are refreshed in place without changing their transcript body. Longest-match selection applies across exact roots and prefixes, so a nested exact root can override a broader campaign prefix. Duplicate project IDs, duplicate roots, duplicate prefixes, or equal-length ambiguity stop the write instead of guessing. Prefixes are plain string prefixes, not regular expressions or AI classification. Use `--projects-dir` if project notes live somewhere other than `03_Projects`.
 
 For a historical backfill, use `ctx import --all` if the index is not current, then run the Python exporter with explicit dates:
 
