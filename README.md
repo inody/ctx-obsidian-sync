@@ -179,6 +179,7 @@ Precedence is:
 | `CTX_DAILY_DIGEST_LANGUAGE` | `en` | Built-in prompt and heading language: `en` or `ja`. |
 | `CTX_DAILY_DIGEST_PROMPT_FILE` | none | File containing custom digest instructions. |
 | `CTX_DAILY_DIGEST_HEADING` | language-specific heading | Heading prepended when Pi's output does not start with it. Set `""` to disable. |
+| `CTX_DAILY_DIGEST_UPDATE_PROJECT_STATUS` | `false` | In the same Pi call, update the marker-delimited current status of registered Projects touched that day. |
 
 Example:
 
@@ -191,6 +192,7 @@ CTX_DAILY_DIGEST_HOST=my-laptop
 CTX_DAILY_DIGEST_DIARY_OFFSET_DAYS=1
 CTX_DAILY_DIGEST_LANGUAGE=en
 CTX_DAILY_DIGEST_HEADING="## Yesterday's Summary"
+CTX_DAILY_DIGEST_UPDATE_PROJECT_STATUS=true
 ```
 
 `AI_OBSIDIAN_TZ` remains accepted as a legacy **environment variable**, not as a configuration-file key. `TZ` is also considered when no ctx-specific timezone is set.
@@ -303,6 +305,26 @@ The digest uses exact local ctx transcripts when available and falls back to syn
 If the destination diary does not exist, the script uses the configured template and substitutes the destination date. Without a template it creates frontmatter plus a minimal `## Memo` section. In `--write` mode, a summarized day with no agent messages is recorded in state without creating or modifying a diary note.
 
 For a next-day section, set the offset to `1`, set `CTX_DAILY_DIGEST_HEADING` to the desired heading, and place the digest markers near the top of the diary template. The model's first Markdown H2 is normalized to the configured heading, so a built-in prompt cannot leave a duplicate language-specific heading. Rolling lookback refreshes skip dates previously tracked with another offset, preventing an offset change from silently migrating older summaries.
+
+### Current status in Project notes
+
+Set `CTX_DAILY_DIGEST_UPDATE_PROJECT_STATUS=true` to let the same Pi invocation also refresh the current status of Projects involved in that day's conversations. This does not make one model call per Project. The script first selects candidates deterministically from session `project_id` metadata and explicit title or alias mentions, then supplies only those candidates and their previous marker content to the existing digest call.
+
+A registered Project note needs `project_id` frontmatter and one marker-delimited section before `## Project locations`:
+
+```markdown
+## Current status
+
+<!-- ctx-project-status:start -->
+No automatic status update yet.
+<!-- ctx-project-status:end -->
+
+## Project locations
+```
+
+Only the marker body is replaced. The generated status contains the summarized source date and one concise current-state line, plus a next-action line when supported by the conversations. Projects that were only mentioned are omitted. A rolling refresh for an older date cannot replace a status already written from a newer date. Unregistered Project notes are not guessed or modified.
+
+Use `--update-project-status` or `--no-update-project-status` to override the configuration for a manual run. `--source-only` includes the selected Project context without calling Pi.
 
 ### Multiple computers
 

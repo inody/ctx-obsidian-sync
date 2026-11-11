@@ -44,3 +44,7 @@
 # missing (default: the built-in language's heading; set it empty to disable).
 #CTX_DAILY_DIGEST_PROMPT_FILE=~/.config/ctx-obsidian-sync/digest-prompt.md
 #CTX_DAILY_DIGEST_HEADING="## Work with AI agents"
+
+# In the same Pi call, update marker-delimited current status in registered
+# Project notes touched by the day's conversations. Default: false.
+#CTX_DAILY_DIGEST_UPDATE_PROJECT_STATUS=false

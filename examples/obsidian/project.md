@@ -14,6 +14,12 @@ repositories:
 
 Describe the purpose and scope of the project here.
 
+## Current status
+
+<!-- ctx-project-status:start -->
+No automatic status update yet.
+<!-- ctx-project-status:end -->
+
 ## Project locations
 
 Document the roles of the workspaces and repositories listed in frontmatter.

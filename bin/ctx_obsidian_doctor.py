@@ -18,6 +18,8 @@ from ctx_to_obsidian_sessions import (
 
 START_MARKER = "<!-- ctx-daily-summary:start -->"
 END_MARKER = "<!-- ctx-daily-summary:end -->"
+PROJECT_STATUS_START = "<!-- ctx-project-status:start -->"
+PROJECT_STATUS_END = "<!-- ctx-project-status:end -->"
 
 
 def check_vault(
@@ -50,6 +52,33 @@ def check_vault(
                     f"[warn] project {project.project_id} has no roots or root_prefixes",
                     file=out,
                 )
+        project_status_enabled = (
+            (setting("CTX_DAILY_DIGEST_UPDATE_PROJECT_STATUS", config, "false") or "")
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on"}
+        )
+        if project_status_enabled:
+            marker_errors = 0
+            for project in projects:
+                note_path = project_path / f"{project.note}.md"
+                text = note_path.read_text(encoding="utf-8", errors="replace")
+                ordered = text.find(PROJECT_STATUS_START) < text.find(PROJECT_STATUS_END)
+                before_locations = text.find("## Current status") < text.find("## Project locations")
+                if (
+                    text.count(PROJECT_STATUS_START) != 1
+                    or text.count(PROJECT_STATUS_END) != 1
+                    or not ordered
+                    or not before_locations
+                ):
+                    print(
+                        f"[error] Project status markers or section order are invalid: {note_path}",
+                        file=out,
+                    )
+                    marker_errors += 1
+            errors += marker_errors
+            if marker_errors == 0:
+                print(f"[ok] Project status markers: {len(projects)} note(s)", file=out)
 
     session_path = vault / sessions_dir
     if session_path.is_dir():

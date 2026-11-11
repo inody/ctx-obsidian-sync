@@ -395,6 +395,155 @@ class DigestParsingTests(unittest.TestCase):
         self.assertEqual(entries[0].body, "hello")
 
 
+class DigestProjectStatusTests(unittest.TestCase):
+    def project_note(self, path: Path, *, markers: bool = True):
+        marker_block = (
+            f"## Current status\n\n{ctx_daily_digest.PROJECT_STATUS_START}\n"
+            f"{ctx_daily_digest.PROJECT_STATUS_END}\n\n"
+            if markers else ""
+        )
+        path.write_text(
+            "---\nproject_id: example-project\naliases:\n  - Example Alias\n---\n\n"
+            "# Example Project\n\nDescription.\n\n"
+            + marker_block
+            + "## Project locations\n\n- code\n\n## Tasks\n",
+            encoding="utf-8",
+        )
+
+    def test_project_candidates_use_session_metadata_and_mentions(self):
+        with tempfile.TemporaryDirectory() as temp:
+            projects_dir = Path(temp)
+            path = projects_dir / "prj_example.md"
+            self.project_note(path)
+            projects = ctx_daily_digest.load_project_status_refs(projects_dir)
+            explicit = ctx_daily_digest.Entry(
+                occurred=ctx_daily_digest.parse_utc_stamp("2026-11-10T12:00:00Z"),
+                role="user",
+                body="work",
+                provider="pi",
+                pc="pc",
+                link="note",
+                session_id="s1",
+                project_id="example-project",
+            )
+            mentioned = ctx_daily_digest.Entry(
+                occurred=ctx_daily_digest.parse_utc_stamp("2026-11-10T13:00:00Z"),
+                role="user",
+                body="Example Alias was updated.",
+                provider="pi",
+                pc="pc",
+                link="note",
+                session_id="s2",
+            )
+            self.assertEqual(
+                set(ctx_daily_digest.project_candidates([explicit], projects)),
+                {"example-project"},
+            )
+            self.assertEqual(
+                set(ctx_daily_digest.project_candidates([mentioned], projects)),
+                {"example-project"},
+            )
+
+    def test_extract_project_updates_filters_unknown_projects(self):
+        generated = (
+            "## Summary\n\nBody\n\n"
+            f"{ctx_daily_digest.PROJECT_UPDATES_START}\n"
+            "### example-project\n- Current: done\n- Next: test\n"
+            "### unknown\n- Current: ignore\n"
+            f"{ctx_daily_digest.PROJECT_UPDATES_END}\n"
+        )
+        with mock.patch("sys.stderr"):
+            digest, updates = ctx_daily_digest.extract_project_updates(
+                generated, {"example-project"}
+            )
+        self.assertEqual(digest, "## Summary\n\nBody")
+        self.assertEqual(
+            updates,
+            {"example-project": "- Current: done\n- Next: test"},
+        )
+
+    def test_project_status_is_inserted_and_older_refresh_cannot_overwrite(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "prj_example.md"
+            self.project_note(path, markers=False)
+            project = ctx_daily_digest.project_status_from_note(path)
+            self.assertIsNotNone(project)
+            outcome = ctx_daily_digest.update_project_status(
+                project, "2026-11-10", "- 現状: first", "ja"
+            )
+            self.assertEqual(outcome, "updated")
+            text = path.read_text(encoding="utf-8")
+            self.assertLess(text.index("## Current status"), text.index("## Project locations"))
+            self.assertIn("更新: 2026-11-10", text)
+            refreshed = ctx_daily_digest.project_status_from_note(path)
+            outcome = ctx_daily_digest.update_project_status(
+                refreshed, "2026-11-09", "- 現状: stale", "ja"
+            )
+            self.assertEqual(outcome, "stale")
+            self.assertNotIn("stale", path.read_text(encoding="utf-8"))
+
+    def test_write_updates_diary_and_project_from_one_model_result(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            vault = home / "vault"
+            sessions = vault / "ctx-sessions"
+            projects = vault / "03_Projects"
+            templates = vault / "Template"
+            sessions.mkdir(parents=True)
+            projects.mkdir()
+            templates.mkdir()
+            self.project_note(projects / "prj_example.md")
+            (templates / "diary.md").write_text(
+                f"{ctx_daily_digest.START_MARKER}\n{ctx_daily_digest.END_MARKER}\n",
+                encoding="utf-8",
+            )
+            (sessions / "session.md").write_text(
+                "---\npc: test\nprovider: pi\nproject_id: example-project\n"
+                "project: \"[[prj_example]]\"\nsession_id: session-1\n---\n\n"
+                "## user - message - 2026-11-10T12:00:00Z\n\nFinished the test.\n",
+                encoding="utf-8",
+            )
+            fake_pi = home / "fake-pi"
+            fake_pi.write_text(
+                "#!/bin/sh\ncat <<'EOF'\n"
+                "## AIエージェントとの作業まとめ\n\n本文\n\n"
+                f"{ctx_daily_digest.PROJECT_UPDATES_START}\n"
+                "### example-project\n- 現状: テスト完了\n"
+                f"{ctx_daily_digest.PROJECT_UPDATES_END}\nEOF\n",
+                encoding="utf-8",
+            )
+            fake_pi.chmod(0o755)
+            state = home / "state.json"
+            env = isolated_env(home)
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "bin" / "ctx_daily_digest.py"),
+                    "--write",
+                    "--date", "2026-11-10",
+                    "--timezone", "UTC",
+                    "--vault", str(vault),
+                    "--template", "Template/diary.md",
+                    "--diary-offset-days", "1",
+                    "--ctx-bin", str(home / "missing-ctx"),
+                    "--pi-bin", str(fake_pi),
+                    "--state", str(state),
+                    "--language", "ja",
+                    "--update-project-status",
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            diary = (vault / "Diary" / "2026-11-11.md").read_text(encoding="utf-8")
+            self.assertIn("本文", diary)
+            self.assertNotIn(ctx_daily_digest.PROJECT_UPDATES_START, diary)
+            project_text = (projects / "prj_example.md").read_text(encoding="utf-8")
+            self.assertIn("更新: 2026-11-10", project_text)
+            self.assertIn("- 現状: テスト完了", project_text)
+
+
 CONFIG_SAMPLE = """
 # comment
 OBSIDIAN_VAULT=~/Notes/My Vault
@@ -404,6 +553,7 @@ CTX_DAILY_DIGEST_HOST='host#1'
 CTX_DAILY_DIGEST_DIARY_OFFSET_DAYS=1
 CTX_DAILY_DIGEST_LANGUAGE=en
 CTX_DAILY_DIGEST_LANGUAGE=ja
+CTX_DAILY_DIGEST_UPDATE_PROJECT_STATUS=true
 UNKNOWN_KEY=1
 not a setting
 """
@@ -420,6 +570,7 @@ class ConfigTests(unittest.TestCase):
             "CTX_DAILY_DIGEST_HOST": "host#1",
             "CTX_DAILY_DIGEST_DIARY_OFFSET_DAYS": "1",
             "CTX_DAILY_DIGEST_LANGUAGE": "ja",
+            "CTX_DAILY_DIGEST_UPDATE_PROJECT_STATUS": "true",
         })
 
     def test_shell_loader_matches_python_and_env_wins(self):
@@ -434,7 +585,7 @@ class ConfigTests(unittest.TestCase):
                 f'source "{ROOT / "bin" / "ctx_config.sh"}"; ctx_config_load; '
                 'for k in OBSIDIAN_VAULT CTX_OBSIDIAN_TZ CTX_OBSIDIAN_DIARY_DIR '
                 'CTX_DAILY_DIGEST_HOST CTX_DAILY_DIGEST_DIARY_OFFSET_DAYS '
-                'CTX_DAILY_DIGEST_LANGUAGE UNKNOWN_KEY; '
+                'CTX_DAILY_DIGEST_LANGUAGE CTX_DAILY_DIGEST_UPDATE_PROJECT_STATUS UNKNOWN_KEY; '
                 'do printf "%s=%s\\n" "$k" "${!k-<unset>}"; done'
             )
             proc = subprocess.run(
@@ -447,6 +598,7 @@ class ConfigTests(unittest.TestCase):
             "CTX_DAILY_DIGEST_HOST=",
             "CTX_DAILY_DIGEST_DIARY_OFFSET_DAYS=1",
             "CTX_DAILY_DIGEST_LANGUAGE=ja",
+            "CTX_DAILY_DIGEST_UPDATE_PROJECT_STATUS=true",
             "UNKNOWN_KEY=<unset>",
         ])
         self.assertIn("unknown key UNKNOWN_KEY", proc.stderr)
