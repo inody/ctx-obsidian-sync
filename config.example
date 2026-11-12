@@ -45,6 +45,10 @@
 #CTX_DAILY_DIGEST_PROMPT_FILE=~/.config/ctx-obsidian-sync/digest-prompt.md
 #CTX_DAILY_DIGEST_HEADING="## Work with AI agents"
 
+# Comma-separated provider names or custom provider keys to omit from the daily
+# digest. Default: chatgpt-share, so passive ChatGPT archives use no digest tokens.
+#CTX_DAILY_DIGEST_EXCLUDE_PROVIDERS=chatgpt-share
+
 # In the same Pi call, update marker-delimited current status in registered
 # Project notes touched by the day's conversations. Default: false.
 #CTX_DAILY_DIGEST_UPDATE_PROJECT_STATUS=false

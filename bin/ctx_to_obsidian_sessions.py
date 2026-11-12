@@ -254,6 +254,8 @@ def build_frontmatter(row: dict, pc_id: str, tz: ZoneInfo) -> str:
     lines.append(f"date: {started.strftime('%Y-%m-%d')}")
     lines.append(f"pc: {pc_id}")
     lines.append(f"provider: {row['provider']}")
+    if row.get("provider_key"):
+        lines.append(f"provider_key: {row['provider_key']}")
     lines.append(f"started: {started.isoformat()}")
     if row.get("cwd"):
         lines.append(f"cwd: {short_path(row['cwd'])}")
@@ -270,7 +272,8 @@ def build_frontmatter(row: dict, pc_id: str, tz: ZoneInfo) -> str:
 def note_filename(row: dict, pc_id: str, tz: ZoneInfo) -> str:
     date = dt_from_ms(int(row["started_at_ms"]), tz).strftime("%Y-%m-%d")
     sid8 = row["ctx_session_id"][:8]
-    return f"{date}__{pc_id}__{row['provider']}__{sid8}.md"
+    provider_label = row.get("provider_key") or row["provider"]
+    return f"{date}__{pc_id}__{provider_label}__{sid8}.md"
 
 
 def fetch_sessions(ctx_bin: str, since: str, until: str, provider: Optional[str], tz: ZoneInfo) -> List[dict]:
@@ -514,6 +517,7 @@ def run_write(ctx_bin: str, sessions: List[dict], pc_id: str, tz: ZoneInfo, labe
             "synced_at": datetime.now(timezone.utc).isoformat(),
             "event_count": ev_count,
             "provider": row["provider"],
+            "provider_key": row.get("provider_key"),
             "provider_session_id": row.get("provider_session_id"),
             "note": path.name,
         }
@@ -524,6 +528,7 @@ def run_write(ctx_bin: str, sessions: List[dict], pc_id: str, tz: ZoneInfo, labe
         new_meta.update({
             "session_id": sid,
             "provider": str(row["provider"]),
+            "provider_key": str(row.get("provider_key") or ""),
             "provider_session_id": str(row.get("provider_session_id") or ""),
             "project_id": desired_project_id,
             "project": desired_project_link,

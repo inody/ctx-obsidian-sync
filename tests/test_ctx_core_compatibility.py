@@ -104,6 +104,17 @@ class CoreEnumerationTests(unittest.TestCase):
             refs = ctx_core.session_refs_for_window("ctx", "start", "end")
         self.assertEqual([ref.ctx_session_id for ref in refs], ["a", "b"])
 
+    def test_custom_provider_key_is_preserved(self):
+        events = [{
+            "ctx_session_id": "custom-session",
+            "provider": "custom",
+            "provider_key": "chatgpt-share",
+            "provider_session_id": "share-1",
+        }]
+        with mock.patch.object(ctx_core, "iter_events", return_value=iter(events)):
+            refs = ctx_core.session_refs_for_window("ctx", "start", "end")
+        self.assertEqual(refs[0].provider_key, "chatgpt-share")
+
     def test_session_summary_uses_complete_event_count_and_earliest_timestamp(self):
         ref = ctx_core.SessionRef("session-1", "pi", "native-1")
         payload = {
@@ -393,6 +404,28 @@ class DigestParsingTests(unittest.TestCase):
         )
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0].body, "hello")
+
+    def test_chatgpt_share_provider_is_excluded_from_digest(self):
+        text = "## user - message - 2026-11-08T06:29:26.207Z\n\nhello\n"
+        note = ctx_daily_digest.NoteRecord(
+            path=Path("chatgpt.md"),
+            meta={
+                "provider": "custom",
+                "provider_key": "chatgpt-share",
+                "session_id": "session-chatgpt",
+            },
+            text=text,
+        )
+        entries = ctx_daily_digest.collect_entries(
+            ctx_bin=None,
+            notes=[note],
+            target_date="2026-11-08",
+            tz=ZoneInfo("Europe/London"),
+            pc_id="pc",
+            max_event_chars=100,
+            excluded_providers={"chatgpt-share"},
+        )
+        self.assertEqual(entries, [])
 
 
 class DigestProjectStatusTests(unittest.TestCase):

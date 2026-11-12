@@ -520,6 +520,7 @@ def local_sessions_for_day(ctx_bin: str, target_date: str, tz: ZoneInfo) -> List
         {
             "ctx_session_id": ref.ctx_session_id,
             "provider": ref.provider,
+            "provider_key": ref.provider_key,
             "provider_session_id": ref.provider_session_id,
         }
         for ref in session_refs_for_window(ctx_bin, start, end)
@@ -535,9 +536,14 @@ def collect_entries(
     pc_id: str,
     max_event_chars: int,
     elision: str = LANGUAGES[DEFAULT_DIGEST_LANGUAGE].elision,
+    excluded_providers: set[str] | None = None,
 ) -> list[Entry]:
+    excluded = excluded_providers or set()
     notes_by_session: dict[str, NoteRecord] = {}
     for note in notes:
+        provider_identity = note.meta.get("provider_key") or note.meta.get("provider", "")
+        if provider_identity in excluded:
+            continue
         session_id = note.meta.get("session_id", "")
         if session_id:
             notes_by_session[session_id] = note
@@ -551,6 +557,9 @@ def collect_entries(
             print(f"warn: local ctx query failed; using synced notes only: {exc}", file=sys.stderr)
             local_sessions = []
         for row in local_sessions:
+            provider_identity = str(row.get("provider_key") or row.get("provider") or "")
+            if provider_identity in excluded:
+                continue
             session_id = str(row.get("ctx_session_id") or "")
             if not session_id:
                 continue
@@ -563,7 +572,13 @@ def collect_entries(
                 continue
             note = notes_by_session.get(session_id)
             link = note.path.stem if note else ""
-            provider = str(row.get("provider") or (note.meta.get("provider") if note else "") or "unknown")
+            provider = str(
+                row.get("provider_key")
+                or row.get("provider")
+                or (note.meta.get("provider_key") if note else "")
+                or (note.meta.get("provider") if note else "")
+                or "unknown"
+            )
             local_entries = entries_from_markdown(
                 transcript,
                 target_date=target_date,
@@ -582,6 +597,9 @@ def collect_entries(
                 rendered_local_ids.add(session_id)
 
     for note in notes:
+        provider_identity = note.meta.get("provider_key") or note.meta.get("provider", "")
+        if provider_identity in excluded:
+            continue
         session_id = note.meta.get("session_id", "")
         if session_id and session_id in rendered_local_ids:
             continue
@@ -590,7 +608,7 @@ def collect_entries(
                 note.text,
                 target_date=target_date,
                 tz=tz,
-                provider=note.meta.get("provider", "unknown"),
+                provider=note.meta.get("provider_key") or note.meta.get("provider", "unknown"),
                 pc=note.meta.get("pc", "unknown"),
                 link=note.path.stem,
                 session_id=session_id or note.path.stem,
@@ -1006,6 +1024,14 @@ def main() -> int:
         ctx_bin = None
 
     notes = load_notes(vault / args.sessions_dir)
+    excluded_setting = setting(
+        "CTX_DAILY_DIGEST_EXCLUDE_PROVIDERS", config, "chatgpt-share"
+    )
+    excluded_providers = {
+        value.strip()
+        for value in (excluded_setting or "").split(",")
+        if value.strip()
+    }
     entries = collect_entries(
         ctx_bin=ctx_bin,
         notes=notes,
@@ -1014,6 +1040,7 @@ def main() -> int:
         pc_id=socket.gethostname().split(".")[0],
         max_event_chars=args.max_event_chars,
         elision=language.elision,
+        excluded_providers=excluded_providers,
     )
     source = build_source(entries, target_date, tz, args.max_input_chars, language)
     projects: dict[str, ProjectStatusRef] = {}

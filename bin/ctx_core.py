@@ -20,6 +20,7 @@ class SessionRef:
     ctx_session_id: str
     provider: str
     provider_session_id: Optional[str]
+    provider_key: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,7 @@ class SessionSummary:
     ctx_session_id: str
     provider: str
     provider_session_id: Optional[str]
+    provider_key: Optional[str]
     started_at_ms: int
     event_count: int
     cwd: Optional[str] = None
@@ -36,6 +38,7 @@ class SessionSummary:
             "ctx_session_id": self.ctx_session_id,
             "provider": self.provider,
             "provider_session_id": self.provider_session_id,
+            "provider_key": self.provider_key,
             "started_at_ms": self.started_at_ms,
             "event_count": self.event_count,
             "cwd": self.cwd,
@@ -190,6 +193,9 @@ def session_refs_for_window(
         provider_session_id = event.get("provider_session_id")
         if provider_session_id is not None and not isinstance(provider_session_id, str):
             raise CtxError("ctx list events returned an invalid provider session id")
+        provider_key = event.get("provider_key")
+        if provider_key is not None and not isinstance(provider_key, str):
+            raise CtxError("ctx list events returned an invalid provider key")
         previous = by_id.get(session_id)
         if previous is not None:
             if previous.provider != event_provider:
@@ -201,7 +207,12 @@ def session_refs_for_window(
             ):
                 raise CtxError("ctx list events returned inconsistent provider session ids")
             provider_session_id = previous.provider_session_id or provider_session_id
-        by_id[session_id] = SessionRef(session_id, event_provider, provider_session_id)
+            if previous.provider_key and provider_key and previous.provider_key != provider_key:
+                raise CtxError("ctx list events returned inconsistent provider keys")
+            provider_key = previous.provider_key or provider_key
+        by_id[session_id] = SessionRef(
+            session_id, event_provider, provider_session_id, provider_key
+        )
     return [by_id[key] for key in sorted(by_id)]
 
 
@@ -244,11 +255,14 @@ def session_summary(ctx_bin: str, ref: SessionRef) -> SessionSummary:
     if not timed:
         raise CtxError("ctx show session had no timestamped events")
     provider = payload.get("provider")
+    provider_key = payload.get("provider_key")
     provider_session_id = payload.get("provider_session_id")
     if not isinstance(provider, str) or not provider:
         raise CtxError("ctx show session omitted provider metadata")
     if provider_session_id is not None and not isinstance(provider_session_id, str):
         raise CtxError("ctx show session returned an invalid provider session id")
+    if provider_key is not None and not isinstance(provider_key, str):
+        raise CtxError("ctx show session returned an invalid provider key")
     if provider != ref.provider:
         raise CtxError("ctx show session provider disagrees with event enumeration")
     if (
@@ -256,10 +270,13 @@ def session_summary(ctx_bin: str, ref: SessionRef) -> SessionSummary:
         and provider_session_id != ref.provider_session_id
     ):
         raise CtxError("ctx show session provider session id disagrees with event enumeration")
+    if ref.provider_key is not None and provider_key != ref.provider_key:
+        raise CtxError("ctx show session provider key disagrees with event enumeration")
     return SessionSummary(
         ctx_session_id=ref.ctx_session_id,
         provider=provider,
         provider_session_id=provider_session_id,
+        provider_key=provider_key,
         started_at_ms=min(timed),
         event_count=len(events),
     )

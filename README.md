@@ -179,6 +179,7 @@ Precedence is:
 | `CTX_DAILY_DIGEST_LANGUAGE` | `en` | Built-in prompt and heading language: `en` or `ja`. |
 | `CTX_DAILY_DIGEST_PROMPT_FILE` | none | File containing custom digest instructions. |
 | `CTX_DAILY_DIGEST_HEADING` | language-specific heading | Heading prepended when Pi's output does not start with it. Set `""` to disable. |
+| `CTX_DAILY_DIGEST_EXCLUDE_PROVIDERS` | `chatgpt-share` | Comma-separated ctx providers or custom `provider_key` values omitted before source assembly, so passive archives do not consume digest tokens. |
 | `CTX_DAILY_DIGEST_UPDATE_PROJECT_STATUS` | `false` | In the same Pi call, update the marker-delimited current status of registered Projects touched that day. |
 
 Example:
@@ -192,6 +193,7 @@ CTX_DAILY_DIGEST_HOST=my-laptop
 CTX_DAILY_DIGEST_DIARY_OFFSET_DAYS=1
 CTX_DAILY_DIGEST_LANGUAGE=en
 CTX_DAILY_DIGEST_HEADING="## Yesterday's Summary"
+CTX_DAILY_DIGEST_EXCLUDE_PROVIDERS=chatgpt-share
 CTX_DAILY_DIGEST_UPDATE_PROJECT_STATUS=true
 ```
 
@@ -307,6 +309,8 @@ If the destination diary does not exist, the script uses the configured template
 For a next-day section, set the offset to `1`, set `CTX_DAILY_DIGEST_HEADING` to the desired heading, and place the digest markers near the top of the diary template. The model's first Markdown H2 is normalized to the configured heading, so a built-in prompt cannot leave a duplicate language-specific heading. Rolling lookback refreshes skip dates previously tracked with another offset, preventing an offset change from silently migrating older summaries.
 
 ### Current status in Project notes
+
+Set `CTX_DAILY_DIGEST_EXCLUDE_PROVIDERS` to a comma-separated list when imported history should remain searchable but not enter the daily model prompt. The filter accepts both native provider names and custom-history `provider_key` values; its default excludes `chatgpt-share`.
 
 Set `CTX_DAILY_DIGEST_UPDATE_PROJECT_STATUS=true` to let the same Pi invocation also refresh the current status of Projects involved in that day's conversations. This does not make one model call per Project. The script first selects candidates deterministically from session `project_id` metadata and explicit title or alias mentions, then supplies only those candidates and their previous marker content to the existing digest call.
 
